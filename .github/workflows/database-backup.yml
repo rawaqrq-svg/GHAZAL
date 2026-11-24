@@ -34,16 +34,16 @@ jobs:
       - name: Setup Node.js Runtime
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'pnpm'
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install PostgreSQL 16 Client Utilities
+      - name: Install PostgreSQL Client Utilities
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y postgresql-client-16
+          sudo apt-get install -y postgresql-client
 
       - name: Run Safe Backup Orchestrator
         env:
