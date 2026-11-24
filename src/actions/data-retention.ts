@@ -3,10 +3,7 @@
 import { prisma } from '@/lib/db';
 import { requirePermission } from '@/lib/dal';
 import { revalidatePath } from 'next/cache';
-import { DATA_RETENTION_CONFIG, DataRetentionPolicy } from '@/lib/data-retention-config';
-
-export { DATA_RETENTION_CONFIG };
-export type { DataRetentionPolicy };
+import { DATA_RETENTION_CONFIG } from '@/lib/data-retention-config';
 
 export interface DataRetentionStatus {
   invoices: {
