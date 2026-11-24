@@ -287,9 +287,22 @@ export function DeliveriesClient({
             status: ord.status
           }
         ],
+        totalExpectedCodFils: ord.codAmountFils,
+        totalCollectedCodFils: ord.status === 'DELIVERED_COLLECTED' || ord.status === 'SETTLED' ? ord.codAmountFils : 0,
         totalCodFils: ord.codAmountFils,
         totalDeliveryFeeFils: ord.deliveryFeeFils,
+        totalReturnFeeFils: 0,
+        totalCourierFeesFils: ord.deliveryFeeFils,
         netSettlementFils: ord.netSettlementFils,
+        storeReceivableFils: Math.max(0, ord.netSettlementFils),
+        companyPayableFils: Math.max(0, -ord.netSettlementFils),
+        remittedFils: 0,
+        remainingFils: ord.netSettlementFils,
+        deliveredOrdersCount: ord.status === 'DELIVERED_COLLECTED' ? 1 : 0,
+        returnedOrdersCount: ord.status === 'RETURNED' ? 1 : 0,
+        inTransitOrdersCount: ord.status === 'IN_TRANSIT' ? 1 : 0,
+        isPartialSettlement: false,
+        remittances: [],
         notes: 'طلب مباشر من المتجر الإلكتروني',
         createdAt: ord.date,
         updatedAt: ord.date
@@ -1218,13 +1231,15 @@ export function DeliveriesClient({
                 const isUpdating = updatingBatchId === batch.id;
                 const isLocked = batch.status === 'DELIVERED' || batch.status === 'SETTLED' || batch.status === 'CANCELLED';
 
-                const statusBg = {
+                const statusBg = ({
                   'PREPARED': 'bg-purple-100 text-purple-900 border-purple-200',
                   'OUT_FOR_DELIVERY': 'bg-teal-100 text-teal-900 border-teal-200',
+                  'PARTIALLY_DELIVERED': 'bg-amber-100 text-amber-900 border-amber-200',
                   'DELIVERED': 'bg-blue-100 text-blue-900 border-blue-200',
+                  'PARTIALLY_SETTLED': 'bg-indigo-100 text-indigo-900 border-indigo-200',
                   'SETTLED': 'bg-emerald-100 text-emerald-900 border-emerald-200',
                   'CANCELLED': 'bg-rose-100 text-rose-900 border-rose-200'
-                }[batch.status] || 'bg-zinc-100 text-zinc-900';
+                } as Record<string, string>)[batch.status] || 'bg-zinc-100 text-zinc-900';
 
                 return (
                   <div 
@@ -1559,13 +1574,15 @@ export function DeliveriesClient({
                   <tbody className="divide-y divide-zinc-100">
                     {filteredBatches.map((batch) => {
                       const isLocked = batch.status === 'DELIVERED' || batch.status === 'SETTLED' || batch.status === 'CANCELLED';
-                      const statusBadge = {
+                      const statusBadge = ({
                         'PREPARED': { label: 'تم التجهيز', bg: 'bg-purple-100 text-purple-900 border-purple-200' },
                         'OUT_FOR_DELIVERY': { label: 'خرجت للتوصيل 🚚', bg: 'bg-teal-100 text-teal-900 border-teal-200' },
+                        'PARTIALLY_DELIVERED': { label: 'تسليم جزئي 📦', bg: 'bg-amber-100 text-amber-900 border-amber-200' },
                         'DELIVERED': { label: 'تم التوصيل للزبائن ✓', bg: 'bg-blue-100 text-blue-900 border-blue-200' },
+                        'PARTIALLY_SETTLED': { label: 'تسوية جزئية ⚖️', bg: 'bg-indigo-100 text-indigo-900 border-indigo-200' },
                         'SETTLED': { label: 'تمت التسوية وتوريد الكاش 💰', bg: 'bg-emerald-100 text-emerald-900 border-emerald-200' },
                         'CANCELLED': { label: 'ملغاة ✕', bg: 'bg-rose-100 text-rose-900 border-rose-200' }
-                      }[batch.status] || { label: batch.status, bg: 'bg-zinc-100 text-zinc-800 border-zinc-200' };
+                      } as Record<string, { label: string; bg: string }>)[batch.status] || { label: batch.status, bg: 'bg-zinc-100 text-zinc-800 border-zinc-200' };
 
                       return (
                         <tr key={batch.id} className="hover:bg-zinc-50/80 transition">

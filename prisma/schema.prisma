@@ -190,6 +190,7 @@ model ProductVariant {
   sku               String       @unique
   price             Int // Stored in minor units (e.g. fils or cents)
   compareAt         Int?
+  costPrice         Int?         @default(0)
   isActive          Boolean      @default(true)
   usesGlobalPricing Boolean      @default(true)
   saleItems         SaleItem[]
@@ -324,6 +325,9 @@ model OrderItem {
   quantity  Int
   unitPrice Int
   total     Int
+  costPrice Int? // Historical unit cost snapshot at time of purchase in fils
+  discount  Int?    @default(0)
+  taxAmount Int?    @default(0)
 }
 
 model OrderStatusHistory {
@@ -381,6 +385,9 @@ model SaleItem {
   quantity  Int
   unitPrice Int
   total     Int
+  costPrice Int? // Historical unit cost snapshot at time of purchase in fils
+  discount  Int?    @default(0)
+  taxAmount Int?    @default(0)
 }
 
 model Payment {

@@ -154,6 +154,9 @@ export async function processCheckout(prevState: any, formData: FormData) {
     quantity: number;
     unitPrice: number;
     total: number;
+    costPrice?: number | null;
+    discount?: number;
+    taxAmount?: number;
   }[] = [];
 
   for (const item of parsedItems) {
@@ -201,7 +204,10 @@ export async function processCheckout(prevState: any, formData: FormData) {
       size: variant.size,
       quantity,
       unitPrice,
-      total
+      total,
+      costPrice: (variant as any).costPriceFils || (variant as any).costPrice || null,
+      discount: 0,
+      taxAmount: 0
     });
   }
 
@@ -285,8 +291,24 @@ export async function processCheckout(prevState: any, formData: FormData) {
       size: 'هدية مجانية 0.000 د.أ',
       quantity: 1,
       unitPrice: 0,
-      total: 0
+      total: 0,
+      costPrice: (g as any).costPriceFils || 500,
+      discount: 0,
+      taxAmount: 0
     });
+  }
+
+  // Allocate reward discount across items for historical integrity
+  if (rewardDiscountFils > 0 && totalAmount > 0) {
+    let runningDiscount = 0;
+    const paidItems = orderItemsData.filter(it => it.unitPrice > 0);
+    for (let i = 0; i < paidItems.length; i++) {
+      const it = paidItems[i];
+      const isLast = i === paidItems.length - 1;
+      const itDiscount = isLast ? (rewardDiscountFils - runningDiscount) : Math.round((it.total / totalAmount) * rewardDiscountFils);
+      runningDiscount += itDiscount;
+      it.discount = itDiscount;
+    }
   }
 
   const grandTotal = Math.max(0, totalAmount - rewardDiscountFils) + shippingCost;
@@ -319,7 +341,10 @@ export async function processCheckout(prevState: any, formData: FormData) {
         size: item.size,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
-        total: item.total
+        total: item.total,
+        costPrice: item.costPrice ?? null,
+        discount: item.discount ?? 0,
+        taxAmount: item.taxAmount ?? 0
       })),
       statusHistory: [
         {

@@ -33,9 +33,10 @@ export interface OfflineSaleItem {
   }>;
   payload: any; // Complete checkout payload for processPOSCheckout
   receiptData: any; // Formatted data for instant thermal printing
-  syncStatus: 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED';
+  syncStatus: 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED' | 'CONFLICT';
   retryCount: number;
   lastError?: string;
+  conflictReason?: string;
 }
 
 let dbInstance: IDBDatabase | null = null;
@@ -280,8 +281,9 @@ export async function removeOfflineSale(id: string): Promise<boolean> {
 
 export async function updateOfflineSaleStatus(
   id: string,
-  status: 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED',
-  lastError?: string
+  status: 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED' | 'CONFLICT',
+  lastError?: string,
+  conflictReason?: string
 ): Promise<void> {
   // 1. Sync to localStorage queue backup
   try {
@@ -290,9 +292,10 @@ export async function updateOfflineSaleStatus(
       const item = queue.find((q: any) => q.id === id);
       if (item) {
         item.syncStatus = status;
-        if (status === 'FAILED') {
+        if (status === 'FAILED' || status === 'CONFLICT') {
           item.retryCount = (item.retryCount || 0) + 1;
           item.lastError = lastError;
+          if (conflictReason) item.conflictReason = conflictReason;
         }
         localStorage.setItem('ghazal_pos_offline_queue', JSON.stringify(queue));
       }
@@ -311,9 +314,10 @@ export async function updateOfflineSaleStatus(
       const item: OfflineSaleItem = getReq.result;
       if (item) {
         item.syncStatus = status;
-        if (status === 'FAILED') {
+        if (status === 'FAILED' || status === 'CONFLICT') {
           item.retryCount = (item.retryCount || 0) + 1;
           item.lastError = lastError;
+          if (conflictReason) item.conflictReason = conflictReason;
         }
         store.put(item);
       }

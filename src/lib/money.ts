@@ -346,52 +346,277 @@ export function calculateCashDrawerReconciliation(params: {
  * Total Delivery Fees = Sum of delivery fees for delivered orders (+ store-borne cancelled orders).
  * Net Payout = Total COD - Total Delivery Fees.
  */
-export function calculateCourierBatchSettlement(
-  orders: Array<{
-    codAmountFils: number;
-    deliveryFeeFils: number;
-    status: string;
-    storeBearsDeliveryCost?: boolean;
-  }>
-): {
-  totalCodFils: number;
-  totalDeliveryFeeFils: number;
+/**
+ * Pure Accounting Engine for Courier Delivery Batch Settlements:
+ * 
+ * Accurately handles:
+ * 1. Per-order settlement states: DELIVERED, PARTIALLY_DELIVERED, RETURNED, CANCELLED, IN_TRANSIT, FAILED_ATTEMPT
+ * 2. Partial settlements when some orders are delivered and others are in-transit
+ * 3. Return fees for returned orders
+ * 4. Actual collected COD vs expected COD (with collection discrepancy tracking)
+ * 5. Negative net balance (when total fees exceed COD collection, creating a store liability payable to the courier)
+ * 6. Multi-installment remittance tracking with remaining balance reconciliation
+ */
+export interface CourierBatchOrderInput {
+  orderId?: string;
+  orderNumber?: string;
+  codAmountFils: number; // Expected COD
+  collectedCodFils?: number | null; // Actual COD collected by courier (defaults to codAmountFils if DELIVERED)
+  deliveryFeeFils: number; // Standard shipping fee
+  returnFeeFils?: number; // Return fee if order was returned
+  status: 'DELIVERED' | 'DELIVERED_COLLECTED' | 'PARTIALLY_DELIVERED' | 'RETURNED' | 'CANCELLED' | 'IN_TRANSIT' | 'OUT_FOR_DELIVERY' | 'FAILED_ATTEMPT' | 'PREPARED' | 'PENDING' | string;
+  storeBearsDeliveryCost?: boolean;
+}
+
+export interface CourierRemittanceInput {
+  id?: string;
+  batchId?: string;
+  receiptRef?: string;
+  amountFils: number;
+  date?: string;
+  paymentMethod?: string;
+  notes?: string;
+  status?: 'CONFIRMED' | 'PENDING' | 'CANCELLED' | string;
+}
+
+export interface SingleOrderSettlementResult {
+  orderId?: string;
+  orderNumber?: string;
+  status: string;
+  expectedCodFils: number;
+  collectedCodFils: number;
+  deliveryFeeFils: number;
+  returnFeeFils: number;
+  totalCourierFeesFils: number;
   netSettlementFils: number;
+  storeReceivableFils: number;
+  companyPayableFils: number;
+  discrepancyFils: number;
+  isFinalized: boolean;
+}
+
+export interface DetailedCourierSettlementResult {
+  totalExpectedCodFils: number;
+  totalCollectedCodFils: number;
+  totalCodFils: number; // Backward-compatible alias to totalCollectedCodFils
+  totalDeliveryFeeFils: number;
+  totalReturnFeeFils: number;
+  totalCourierFeesFils: number;
+  netSettlementFils: number;
+  storeReceivableFils: number; // Amount courier owes the store (if net > 0)
+  companyPayableFils: number; // Liability amount store owes the courier (if net < 0)
+  codDiscrepancyFils: number; // Actual collected - Expected for delivered/partially delivered orders
   deliveredOrdersCount: number;
-  cancelledOrdersCount: number;
+  returnedOrdersCount: number;
+  cancelledOrdersCount: number; // Backward-compatible alias to returnedOrdersCount
+  inTransitOrdersCount: number;
   totalOrdersCount: number;
+  isPartialSettlement: boolean;
+  settlementStatus: 'SETTLED' | 'PARTIALLY_SETTLED' | 'OUT_FOR_DELIVERY' | 'LIABILITY_OWED';
+  totalRemittedFils: number;
+  remainingBalanceFils: number;
+}
+
+/**
+ * Calculates net settlement between store and courier without Math.max(0) clipping.
+ * Preserves true mathematical signed value:
+ * Positive = Store Receivable (courier owes store)
+ * Negative = Company Payable (store owes courier for delivery/return fees)
+ */
+export function calculateNetSettlement(
+  totalCodFils: number,
+  deliveryFeeFils: number,
+  returnFeeFils: number = 0
+): {
+  netSettlementFils: number;
+  storeReceivableFils: number;
+  companyPayableFils: number;
 } {
-  let totalCodFils = 0;
+  const net = Math.round(totalCodFils || 0) - Math.round(deliveryFeeFils || 0) - Math.round(returnFeeFils || 0);
+  return {
+    netSettlementFils: net,
+    storeReceivableFils: Math.max(0, net),
+    companyPayableFils: Math.max(0, -net)
+  };
+}
+
+/**
+ * Computes single order settlement details inside a courier batch.
+ */
+export function calculateOrderNetSettlement(order: CourierBatchOrderInput): SingleOrderSettlementResult {
+  const rawStatus = (order.status || '').toUpperCase();
+  const isDelivered = rawStatus === 'DELIVERED' || rawStatus === 'DELIVERED_COLLECTED';
+  const isPartiallyDelivered = rawStatus === 'PARTIALLY_DELIVERED';
+  const isReturned = rawStatus === 'RETURNED' || rawStatus === 'CANCELLED';
+  const isFinalized = isDelivered || isPartiallyDelivered || isReturned;
+
+  const expectedCodFils = Math.max(0, Math.round(order.codAmountFils || 0));
+  const rawFee = Math.max(0, Math.round(order.deliveryFeeFils || 0));
+  const returnFeeFils = Math.max(0, Math.round(order.returnFeeFils || 0));
+
+  let collectedCodFils = 0;
+  let deliveryFeeFils = 0;
+  let discrepancyFils = 0;
+
+  if (isDelivered) {
+    collectedCodFils = typeof order.collectedCodFils === 'number' && !isNaN(order.collectedCodFils)
+      ? Math.max(0, Math.round(order.collectedCodFils))
+      : expectedCodFils;
+    deliveryFeeFils = rawFee;
+    discrepancyFils = collectedCodFils - expectedCodFils;
+  } else if (isPartiallyDelivered) {
+    collectedCodFils = typeof order.collectedCodFils === 'number' && !isNaN(order.collectedCodFils)
+      ? Math.max(0, Math.round(order.collectedCodFils))
+      : 0;
+    deliveryFeeFils = rawFee;
+    discrepancyFils = collectedCodFils - expectedCodFils;
+  } else if (isReturned) {
+    collectedCodFils = typeof order.collectedCodFils === 'number' && !isNaN(order.collectedCodFils)
+      ? Math.max(0, Math.round(order.collectedCodFils))
+      : 0;
+    deliveryFeeFils = order.storeBearsDeliveryCost ? rawFee : 0;
+    discrepancyFils = 0;
+  } else {
+    // In transit or prepared
+    collectedCodFils = 0;
+    deliveryFeeFils = 0;
+    discrepancyFils = 0;
+  }
+
+  const effectiveReturnFee = (isReturned || isPartiallyDelivered) ? returnFeeFils : 0;
+  const totalCourierFeesFils = deliveryFeeFils + effectiveReturnFee;
+  const netSettlementFils = isFinalized ? (collectedCodFils - totalCourierFeesFils) : 0;
+  const storeReceivableFils = Math.max(0, netSettlementFils);
+  const companyPayableFils = Math.max(0, -netSettlementFils);
+
+  return {
+    orderId: order.orderId,
+    orderNumber: order.orderNumber,
+    status: order.status,
+    expectedCodFils,
+    collectedCodFils,
+    deliveryFeeFils,
+    returnFeeFils: effectiveReturnFee,
+    totalCourierFeesFils,
+    netSettlementFils,
+    storeReceivableFils,
+    companyPayableFils,
+    discrepancyFils,
+    isFinalized
+  };
+}
+
+/**
+ * Computes batch-level courier settlement with per-order precision,
+ * unmasked negative liabilities, collection discrepancies, and multi-installment remittances.
+ */
+export function calculateCourierBatchSettlement(
+  orders: CourierBatchOrderInput[],
+  remittances?: CourierRemittanceInput[]
+): DetailedCourierSettlementResult {
+  let totalExpectedCodFils = 0;
+  let totalCollectedCodFils = 0;
   let totalDeliveryFeeFils = 0;
+  let totalReturnFeeFils = 0;
+  let codDiscrepancyFils = 0;
   let deliveredOrdersCount = 0;
-  let cancelledOrdersCount = 0;
+  let returnedOrdersCount = 0;
+  let inTransitOrdersCount = 0;
 
   for (const order of orders) {
-    const isCancelled = order.status === 'CANCELLED';
+    const rawStatus = (order.status || '').toUpperCase();
+    const isDelivered = rawStatus === 'DELIVERED' || rawStatus === 'DELIVERED_COLLECTED';
+    const isPartiallyDelivered = rawStatus === 'PARTIALLY_DELIVERED';
+    const isReturned = rawStatus === 'RETURNED' || rawStatus === 'CANCELLED';
 
-    if (isCancelled) {
-      cancelledOrdersCount++;
-      // Customer pays 0 COD on cancelled orders
+    const expectedCod = Math.max(0, Math.round(order.codAmountFils || 0));
+    totalExpectedCodFils += expectedCod;
+
+    const deliveryFee = Math.max(0, Math.round(order.deliveryFeeFils || 0));
+    const returnFee = Math.max(0, Math.round(order.returnFeeFils || 0));
+
+    if (isDelivered) {
+      deliveredOrdersCount++;
+      const actualCollected = typeof order.collectedCodFils === 'number' && !isNaN(order.collectedCodFils)
+        ? Math.max(0, Math.round(order.collectedCodFils))
+        : expectedCod;
+      totalCollectedCodFils += actualCollected;
+      totalDeliveryFeeFils += deliveryFee;
+      codDiscrepancyFils += (actualCollected - expectedCod);
+    } else if (isPartiallyDelivered) {
+      deliveredOrdersCount++;
+      const actualCollected = typeof order.collectedCodFils === 'number' && !isNaN(order.collectedCodFils)
+        ? Math.max(0, Math.round(order.collectedCodFils))
+        : 0;
+      totalCollectedCodFils += actualCollected;
+      totalDeliveryFeeFils += deliveryFee;
+      totalReturnFeeFils += returnFee;
+      codDiscrepancyFils += (actualCollected - expectedCod);
+    } else if (isReturned) {
+      returnedOrdersCount++;
+      totalReturnFeeFils += returnFee;
       if (order.storeBearsDeliveryCost) {
-        // Store pays courier for the delivery attempt
-        totalDeliveryFeeFils += Math.round(order.deliveryFeeFils || 0);
+        totalDeliveryFeeFils += deliveryFee;
+      }
+      if (typeof order.collectedCodFils === 'number' && order.collectedCodFils > 0) {
+        totalCollectedCodFils += Math.round(order.collectedCodFils);
       }
     } else {
-      deliveredOrdersCount++;
-      totalCodFils += Math.round(order.codAmountFils || 0);
-      totalDeliveryFeeFils += Math.round(order.deliveryFeeFils || 0);
+      inTransitOrdersCount++;
     }
   }
 
-  const netSettlementFils = totalCodFils - totalDeliveryFeeFils;
+  const totalCourierFeesFils = totalDeliveryFeeFils + totalReturnFeeFils;
+  const netSettlementFils = totalCollectedCodFils - totalCourierFeesFils;
+  const storeReceivableFils = Math.max(0, netSettlementFils);
+  const companyPayableFils = Math.max(0, -netSettlementFils);
+
+  // Multi-installment remittance aggregation
+  let totalRemittedFils = 0;
+  if (Array.isArray(remittances)) {
+    for (const rem of remittances) {
+      if (rem && rem.status !== 'CANCELLED' && typeof rem.amountFils === 'number' && !isNaN(rem.amountFils)) {
+        totalRemittedFils += Math.round(rem.amountFils);
+      }
+    }
+  }
+
+  const targetSettlementFils = netSettlementFils >= 0 ? netSettlementFils : companyPayableFils;
+  const remainingBalanceFils = Math.max(0, targetSettlementFils - totalRemittedFils);
+
+  const isPartialSettlement = inTransitOrdersCount > 0 && deliveredOrdersCount > 0;
+  let settlementStatus: 'SETTLED' | 'PARTIALLY_SETTLED' | 'OUT_FOR_DELIVERY' | 'LIABILITY_OWED' = 'OUT_FOR_DELIVERY';
+
+  if (inTransitOrdersCount === 0 && orders.length > 0) {
+    if (netSettlementFils < 0) {
+      settlementStatus = remainingBalanceFils === 0 ? 'SETTLED' : 'LIABILITY_OWED';
+    } else {
+      settlementStatus = remainingBalanceFils === 0 ? 'SETTLED' : 'PARTIALLY_SETTLED';
+    }
+  } else if (isPartialSettlement) {
+    settlementStatus = 'PARTIALLY_SETTLED';
+  }
 
   return {
-    totalCodFils,
+    totalExpectedCodFils,
+    totalCollectedCodFils,
+    totalCodFils: totalCollectedCodFils,
     totalDeliveryFeeFils,
+    totalReturnFeeFils,
+    totalCourierFeesFils,
     netSettlementFils,
+    storeReceivableFils,
+    companyPayableFils,
+    codDiscrepancyFils,
     deliveredOrdersCount,
-    cancelledOrdersCount,
-    totalOrdersCount: orders.length
+    returnedOrdersCount,
+    cancelledOrdersCount: returnedOrdersCount,
+    inTransitOrdersCount,
+    totalOrdersCount: orders.length,
+    isPartialSettlement,
+    settlementStatus,
+    totalRemittedFils,
+    remainingBalanceFils
   };
 }
 

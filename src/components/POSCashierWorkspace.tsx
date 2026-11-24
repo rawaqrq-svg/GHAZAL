@@ -449,9 +449,13 @@ export function POSCashierWorkspace({
                 await addSaleToLocalHistory(matched);
               }
             } catch (e) {}
+          } else if (res && (res.conflict || (res.error && (res.error.includes('تعارض') || res.error.includes('conflict') || res.error.includes('غير متوفر') || res.error.includes('ملغي'))))) {
+            const conflictMsg = res.error || 'تعارض في بيانات الفاتورة أو توفر الأصناف';
+            await updateOfflineSaleStatus(item.id, 'CONFLICT', conflictMsg, conflictMsg);
+            remaining.push({ ...item, syncStatus: 'CONFLICT', lastError: conflictMsg, conflictReason: conflictMsg });
           } else {
             await updateOfflineSaleStatus(item.id, 'FAILED', res?.error || 'Server error');
-            remaining.push(item);
+            remaining.push({ ...item, syncStatus: 'FAILED', lastError: res?.error || 'Server error' });
           }
         } catch (e: any) {
           await updateOfflineSaleStatus(item.id, 'FAILED', e?.message || 'Network error');
@@ -5908,6 +5912,16 @@ export function POSCashierWorkspace({
                               <RefreshCcw className="w-3 h-3 animate-spin" />
                               جارٍ الإرسال...
                             </span>
+                          ) : sale.syncStatus === 'CONFLICT' ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded" title={sale.conflictReason || sale.lastError}>
+                              <AlertCircle className="w-3 h-3" />
+                              تعارض (Conflict)
+                            </span>
+                          ) : sale.syncStatus === 'SYNCED' ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                              <CheckCheck className="w-3 h-3" />
+                              تمت المزامنة
+                            </span>
                           ) : sale.syncStatus === 'FAILED' ? (
                             <span className="inline-flex items-center gap-1 text-[11px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded" title={sale.lastError}>
                               <AlertCircle className="w-3 h-3" />
@@ -5920,20 +5934,40 @@ export function POSCashierWorkspace({
                           )}
                         </td>
                         <td className="p-3 text-center">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (sale.receiptData) {
-                                setReceiptData(sale.receiptData);
-                                setShowReceiptModal(true);
-                              }
-                            }}
-                            className="p-1.5 hover:bg-zinc-200 text-zinc-700 rounded-lg transition inline-flex items-center gap-1 text-[11px] font-bold"
-                            title="طباعة إيصال الفاتورة"
-                          >
-                            <Printer className="w-3.5 h-3.5" />
-                            <span>طباعة</span>
-                          </button>
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (sale.receiptData) {
+                                  setReceiptData(sale.receiptData);
+                                  setShowReceiptModal(true);
+                                }
+                              }}
+                              className="p-1.5 hover:bg-zinc-200 text-zinc-700 rounded-lg transition inline-flex items-center gap-1 text-[11px] font-bold"
+                              title="طباعة إيصال الفاتورة"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>طباعة</span>
+                            </button>
+                            {(sale.syncStatus === 'CONFLICT' || sale.syncStatus === 'FAILED') && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (confirm('هل أنت متأكد من حذف هذه الفاتورة من قائمة الانتظار؟')) {
+                                    await removeOfflineSale(sale.id);
+                                    const updated = await getOfflineQueue();
+                                    setOfflineQueueList(updated || []);
+                                    setOfflineQueueCount(updated?.length || 0);
+                                    showToast('تم حذف الفاتورة من القائمة المعلقة');
+                                  }
+                                }}
+                                className="p-1.5 hover:bg-rose-100 text-rose-600 rounded-lg transition text-[11px] font-bold"
+                                title="حذف الفاتورة المعلقة"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

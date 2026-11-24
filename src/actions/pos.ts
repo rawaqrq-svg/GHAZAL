@@ -491,6 +491,15 @@ export async function processPOSCheckout(data: any): Promise<{
         const total = unitPrice * quantity;
         subtotal += total;
 
+        // Snapshot historical unit cost at time of sale
+        const costPriceSnapshot = typeof (variant as any)?.costPriceFils === 'number'
+          ? (variant as any).costPriceFils
+          : typeof (variant as any)?.costPrice === 'number'
+            ? (variant as any).costPrice
+            : typeof (item as any)?.costPrice === 'number'
+              ? (item as any).costPrice
+              : null;
+
         saleItemsData.push({
           variantId: effectiveVariantId,
           sku: item.sku || variant?.sku || 'POS',
@@ -498,7 +507,10 @@ export async function processPOSCheckout(data: any): Promise<{
           size: variantSize,
           quantity,
           unitPrice,
-          total
+          total,
+          costPrice: costPriceSnapshot,
+          discount: 0,
+          taxAmount: 0
         });
       }
 
@@ -529,6 +541,28 @@ export async function processPOSCheckout(data: any): Promise<{
         taxAmount = 0;
         calculatedSubtotal = subtotalAfterDiscount;
         grandTotal = subtotalAfterDiscount;
+      }
+
+      // Allocate historical discount and tax snapshots across individual line items
+      if (discount > 0 || taxAmount > 0) {
+        let runningDiscount = 0;
+        let runningTax = 0;
+        for (let i = 0; i < saleItemsData.length; i++) {
+          const it = saleItemsData[i];
+          const isLast = i === saleItemsData.length - 1;
+          const itRatio = subtotal > 0 ? it.total / subtotal : 0;
+          
+          const itDiscount = isLast ? (discount - runningDiscount) : Math.round(discount * itRatio);
+          runningDiscount += itDiscount;
+          it.discount = itDiscount;
+
+          const itNet = Math.max(0, it.total - itDiscount);
+          const itTax = isLast 
+            ? (taxAmount - runningTax) 
+            : (taxEnabled ? (pricesIncludeTax ? calculateInclusiveTax(itNet, taxRate) : calculateExclusiveTax(itNet, taxRate)) : 0);
+          runningTax += itTax;
+          it.taxAmount = itTax;
+        }
       }
 
       const isCredit = paymentMethod === 'CREDIT';

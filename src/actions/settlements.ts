@@ -9,6 +9,8 @@ import { GHAZAL_DEMO_ORDERS, getDemoOrderById } from '@/lib/orders-catalog';
 import {
   calculateCashDrawerReconciliation,
   calculateCourierBatchSettlement,
+  calculateNetSettlement,
+  calculateOrderNetSettlement,
   calculateProfitAndLoss,
   filsToDisplay,
   jodToFils
@@ -103,21 +105,48 @@ export interface CourierBatchOrderSummary {
   customerPhone: string;
   city: string;
   address?: string;
-  codAmountFils: number;
-  deliveryFeeFils: number;
-  netSettlementFils: number;
-  status: string;
+  codAmountFils: number; // المبلغ المطلوب تحصيله (Expected COD)
+  collectedCodFils?: number | null; // المبلغ المحصل فعلياً (Actual Collected COD)
+  deliveryFeeFils: number; // أجور التوصيل
+  returnFeeFils?: number; // أجور إرجاع الطلب عند فشل التوصيل أو الارتجاع
+  discrepancyFils?: number; // فروقات التحصيل = المحصل فعلياً - المتوقع
+  netSettlementFils: number; // صافي تسوية الطلب = المحصل - أجور التوصيل - أجور الإرجاع
+  status: 'DELIVERED' | 'DELIVERED_COLLECTED' | 'RETURNED' | 'CANCELLED' | 'IN_TRANSIT' | 'OUT_FOR_DELIVERY' | 'FAILED_ATTEMPT' | 'SHIPPED' | string;
+  settledAt?: string;
+  notes?: string;
+}
+
+export interface CourierBatchRemittance {
+  id: string;
+  amountFils: number;
+  receiptRef: string;
+  paidAt: string;
+  paidBy?: string;
+  notes?: string;
 }
 
 export interface CourierBatchRecord {
   id: string;
   batchNumber: string; // رقم الطلبية (قابل للتعديل)
   courierName: string; // شركة التوصيل أو اسم المندوب
-  status: 'PREPARED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'SETTLED' | 'CANCELLED';
+  status: 'PREPARED' | 'OUT_FOR_DELIVERY' | 'PARTIALLY_DELIVERED' | 'DELIVERED' | 'PARTIALLY_SETTLED' | 'SETTLED' | 'CANCELLED';
   orders: CourierBatchOrderSummary[];
-  totalCodFils: number;
-  totalDeliveryFeeFils: number;
-  netSettlementFils: number;
+  totalExpectedCodFils: number; // إجمالي التحصيل المتوقع لجميع طلبات الشحنة
+  totalCollectedCodFils: number; // التحصيل الفعلي للطلبات المسلمة
+  totalCodFils: number; // التحصيل الفعلي (للتوافق)
+  totalDeliveryFeeFils: number; // أجور التوصيل للطلبات المسلمة
+  totalReturnFeeFils: number; // أجور إرجاع الطلبات المرتجعة
+  totalCourierFeesFils: number; // مجموع الأجور المستحقة لشركة التوصيل
+  netSettlementFils: number; // صافي المبلغ المستحق (يمكن أن يكون سالباً عند زيادة الأجور عن التحصيل)
+  storeReceivableFils: number; // مستحق للمحل
+  companyPayableFils: number; // التزام مستحق لشركة التوصيل
+  remittedFils: number; // ما تم توريده عبر دفعات
+  remainingFils: number; // المتبقي للتوريد
+  remittances?: CourierBatchRemittance[];
+  deliveredOrdersCount: number;
+  returnedOrdersCount: number;
+  inTransitOrdersCount: number;
+  isPartialSettlement: boolean;
   createdAt: string;
   updatedAt: string;
   notes?: string;
@@ -1025,46 +1054,198 @@ export async function getSettlementsDashboardData(channelFilter?: string) {
   // Sort invoices newest first
   centralInvoicesList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  // 6. Courier Batches Initialization
-  if (!memoryStoreState.courierBatches) {
+  // 6. Courier Batches Initialization (Defaulting to the user-specified 10-order partial delivery scenario)
+  if (!memoryStoreState.courierBatches || memoryStoreState.courierBatches.length === 0) {
     memoryStoreState.courierBatches = [
       {
         id: 'batch-001',
-        batchNumber: 'BATCH-2026-001',
+        batchNumber: 'BATCH-001',
         courierName: 'سريعة اكسبرس',
-        status: 'OUT_FOR_DELIVERY',
-        createdAt: '2026-11-20T10:30:00.000Z',
-        updatedAt: '2026-11-20T11:00:00.000Z',
-        notes: 'شحنة طلبيات المحافظات - جولة الصباح',
+        status: 'PARTIALLY_DELIVERED',
+        createdAt: '2026-11-24T08:30:00.000Z',
+        updatedAt: '2026-11-24T14:00:00.000Z',
+        notes: 'طلبية توصيل مجمعة #BATCH-001 — تسوية جزئية (7 تم التسليم، 2 مرتجع، 1 قيد التوصيل)',
         orders: [
+          // 7 Delivered orders (Actual collection = 140 JOD, Delivery fees = 21 JOD)
           {
             orderId: 'del-1',
-            orderNumber: 'ORD-5479',
-            customerName: 'آية منصور',
-            customerPhone: '0799887766',
-            city: 'الزرقاء',
-            address: 'الزرقاء الجديدة - شارع 36',
-            codAmountFils: 29000,
+            orderNumber: 'ORD-7001',
+            customerName: 'سارة خالد',
+            customerPhone: '0799112233',
+            city: 'عمان',
+            address: 'خلدا - دوار المنهل',
+            codAmountFils: 20000,
+            collectedCodFils: 20000,
             deliveryFeeFils: 3000,
-            netSettlementFils: 26000,
-            status: 'SHIPPED'
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 17000,
+            status: 'DELIVERED',
+            settledAt: '2026-11-24T12:30:00.000Z'
           },
           {
             orderId: 'del-2',
-            orderNumber: 'ORD-5480',
-            customerName: 'نور الهدى',
-            customerPhone: '0788776655',
+            orderNumber: 'ORD-7002',
+            customerName: 'رنا أحمد',
+            customerPhone: '0788223344',
+            city: 'عمان',
+            address: 'طبربور - قرب السيفوي',
+            codAmountFils: 20000,
+            collectedCodFils: 20000,
+            deliveryFeeFils: 3000,
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 17000,
+            status: 'DELIVERED',
+            settledAt: '2026-11-24T12:45:00.000Z'
+          },
+          {
+            orderId: 'del-3',
+            orderNumber: 'ORD-7003',
+            customerName: 'هدى يوسف',
+            customerPhone: '0777334455',
+            city: 'الزرقاء',
+            address: 'الزرقاء الجديدة - شارع 36',
+            codAmountFils: 20000,
+            collectedCodFils: 20000,
+            deliveryFeeFils: 3000,
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 17000,
+            status: 'DELIVERED',
+            settledAt: '2026-11-24T13:00:00.000Z'
+          },
+          {
+            orderId: 'del-4',
+            orderNumber: 'ORD-7004',
+            customerName: 'مها محمود',
+            customerPhone: '0799445566',
             city: 'إربد',
-            address: 'إربد - شارع الجامعة',
-            codAmountFils: 45000,
-            deliveryFeeFils: 3500,
-            netSettlementFils: 41500,
-            status: 'SHIPPED'
+            address: 'إربد - الحي الشرقي',
+            codAmountFils: 20000,
+            collectedCodFils: 20000,
+            deliveryFeeFils: 3000,
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 17000,
+            status: 'DELIVERED',
+            settledAt: '2026-11-24T13:15:00.000Z'
+          },
+          {
+            orderId: 'del-5',
+            orderNumber: 'ORD-7005',
+            customerName: 'لينا إبراهيم',
+            customerPhone: '0788556677',
+            city: 'عمان',
+            address: 'الجبيهة - دوار المنهل',
+            codAmountFils: 20000,
+            collectedCodFils: 20000,
+            deliveryFeeFils: 3000,
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 17000,
+            status: 'DELIVERED',
+            settledAt: '2026-11-24T13:30:00.000Z'
+          },
+          {
+            orderId: 'del-6',
+            orderNumber: 'ORD-7006',
+            customerName: 'دعاء صالح',
+            customerPhone: '0777667788',
+            city: 'السلط',
+            address: 'ديران - قرب البلدية',
+            codAmountFils: 20000,
+            collectedCodFils: 20000,
+            deliveryFeeFils: 3000,
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 17000,
+            status: 'DELIVERED',
+            settledAt: '2026-11-24T13:40:00.000Z'
+          },
+          {
+            orderId: 'del-7',
+            orderNumber: 'ORD-7007',
+            customerName: 'ديما سمير',
+            customerPhone: '0799778899',
+            city: 'مادبا',
+            address: 'طريق المطار - قرب الجامعة',
+            codAmountFils: 20000,
+            collectedCodFils: 20000,
+            deliveryFeeFils: 3000,
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 17000,
+            status: 'DELIVERED',
+            settledAt: '2026-11-24T13:50:00.000Z'
+          },
+          // 2 Returned orders (Collected = 0 JOD, Return fees = 4 JOD)
+          {
+            orderId: 'del-8',
+            orderNumber: 'ORD-7008',
+            customerName: 'سلمى كريم',
+            customerPhone: '0788889900',
+            city: 'عمان',
+            address: 'الصويفية - شارع الوكالات',
+            codAmountFils: 20000,
+            collectedCodFils: 0,
+            deliveryFeeFils: 0,
+            returnFeeFils: 2000,
+            discrepancyFils: -20000,
+            netSettlementFils: -2000,
+            status: 'RETURNED',
+            notes: 'رفضت الزبونة الاستلام - عاد إلى المعرض مع احتساب 2.000 د.أ أجور إرجاع'
+          },
+          {
+            orderId: 'del-9',
+            orderNumber: 'ORD-7009',
+            customerName: 'أسماء عادل',
+            customerPhone: '0777990011',
+            city: 'العقبة',
+            address: 'المنطقة الشمالية',
+            codAmountFils: 20000,
+            collectedCodFils: 0,
+            deliveryFeeFils: 0,
+            returnFeeFils: 2000,
+            discrepancyFils: -20000,
+            netSettlementFils: -2000,
+            status: 'RETURNED',
+            notes: 'عدم الرد على المندوب 3 مرات - عاد إلى المعرض مع احتساب 2.000 د.أ أجور إرجاع'
+          },
+          // 1 In-Transit order (Pending)
+          {
+            orderId: 'del-10',
+            orderNumber: 'ORD-7010',
+            customerName: 'يارا ناصر',
+            customerPhone: '0799001122',
+            city: 'عمان',
+            address: 'تلاع العلي - شارع المدينة المنورة',
+            codAmountFils: 20000,
+            collectedCodFils: null,
+            deliveryFeeFils: 3000,
+            returnFeeFils: 0,
+            discrepancyFils: 0,
+            netSettlementFils: 0,
+            status: 'IN_TRANSIT',
+            notes: 'قيد التوصيل مع المندوب - جولة المساء'
           }
         ],
-        totalCodFils: 74000,
-        totalDeliveryFeeFils: 6500,
-        netSettlementFils: 67500
+        totalExpectedCodFils: 200000, // 200.000 د.أ
+        totalCollectedCodFils: 140000, // 140.000 د.أ
+        totalCodFils: 140000, // 140.000 د.أ
+        totalDeliveryFeeFils: 21000, // 21.000 د.أ
+        totalReturnFeeFils: 4000, // 4.000 د.أ
+        totalCourierFeesFils: 25000, // 25.000 د.أ
+        netSettlementFils: 115000, // 115.000 د.أ (140 - 21 - 4)
+        storeReceivableFils: 115000,
+        companyPayableFils: 0,
+        remittedFils: 0,
+        remainingFils: 115000,
+        deliveredOrdersCount: 7,
+        returnedOrdersCount: 2,
+        inTransitOrdersCount: 1,
+        isPartialSettlement: true,
+        remittances: []
       }
     ];
   }
@@ -1882,15 +2063,29 @@ export async function createCourierBatchAction(data: {
       } catch (e) {}
     }
 
+    const net = totalCodFils - totalDeliveryFeeFils;
     const newBatch: CourierBatchRecord = {
       id: `batch-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       batchNumber: cleanNum,
       courierName: courierName.trim(),
       status: 'OUT_FOR_DELIVERY',
       orders: batchOrders,
+      totalExpectedCodFils: totalCodFils,
+      totalCollectedCodFils: 0,
       totalCodFils,
       totalDeliveryFeeFils,
-      netSettlementFils: totalCodFils - totalDeliveryFeeFils,
+      totalReturnFeeFils: 0,
+      totalCourierFeesFils: totalDeliveryFeeFils,
+      netSettlementFils: net,
+      storeReceivableFils: Math.max(0, net),
+      companyPayableFils: Math.max(0, -net),
+      remittedFils: 0,
+      remainingFils: net,
+      deliveredOrdersCount: 0,
+      returnedOrdersCount: 0,
+      inTransitOrdersCount: batchOrders.length,
+      isPartialSettlement: false,
+      remittances: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       notes: notes || ''
@@ -2455,5 +2650,221 @@ export async function deleteCourierCompanyAction(id: string) {
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Updates individual order settlement state within a delivery batch.
+ * Supports partial deliveries, returns with return fees, delivery retries, and actual collection discrepancies.
+ */
+export async function updateBatchOrderDeliveryStatusAction(data: {
+  batchId: string;
+  orderId: string;
+  newStatus: 'DELIVERED' | 'RETURNED' | 'IN_TRANSIT' | 'FAILED_ATTEMPT';
+  collectedCodFils?: number | null;
+  deliveryFeeFils?: number;
+  returnFeeFils?: number;
+  notes?: string;
+}) {
+  try {
+    const { batchId, orderId, newStatus, collectedCodFils, deliveryFeeFils, returnFeeFils, notes } = data;
+
+    if (!memoryStoreState.courierBatches) {
+      return { success: false, error: 'سجل طلبيات الشحن غير موجود' };
+    }
+
+    const batch = memoryStoreState.courierBatches.find(b => b.id === batchId || b.batchNumber === batchId);
+    if (!batch) {
+      return { success: false, error: 'طلبية التوصيل غير موجودة' };
+    }
+
+    const orderIndex = batch.orders.findIndex(o => o.orderId === orderId || o.orderNumber === orderId);
+    if (orderIndex === -1) {
+      return { success: false, error: 'الطلب غير موجود داخل هذه الطلبية' };
+    }
+
+    const batchOrder = batch.orders[orderIndex];
+    batchOrder.status = newStatus;
+
+    if (typeof deliveryFeeFils === 'number') {
+      batchOrder.deliveryFeeFils = Math.max(0, Math.round(deliveryFeeFils));
+    }
+    if (typeof returnFeeFils === 'number') {
+      batchOrder.returnFeeFils = Math.max(0, Math.round(returnFeeFils));
+    }
+
+    if (newStatus === 'DELIVERED') {
+      batchOrder.collectedCodFils = typeof collectedCodFils === 'number'
+        ? Math.max(0, Math.round(collectedCodFils))
+        : batchOrder.codAmountFils;
+      batchOrder.returnFeeFils = 0;
+      batchOrder.settledAt = new Date().toISOString();
+    } else if (newStatus === 'RETURNED') {
+      batchOrder.collectedCodFils = typeof collectedCodFils === 'number' ? Math.max(0, Math.round(collectedCodFils)) : 0;
+      batchOrder.returnFeeFils = typeof returnFeeFils === 'number' ? Math.max(0, Math.round(returnFeeFils)) : 2000;
+      batchOrder.settledAt = new Date().toISOString();
+    } else if (newStatus === 'IN_TRANSIT' || newStatus === 'FAILED_ATTEMPT') {
+      batchOrder.collectedCodFils = null;
+      batchOrder.returnFeeFils = 0;
+    }
+
+    // Calculate individual order settlement math using pure accounting engine
+    const orderCalc = calculateOrderNetSettlement({
+      orderId: batchOrder.orderId,
+      orderNumber: batchOrder.orderNumber,
+      codAmountFils: batchOrder.codAmountFils,
+      collectedCodFils: batchOrder.collectedCodFils,
+      deliveryFeeFils: batchOrder.deliveryFeeFils,
+      returnFeeFils: batchOrder.returnFeeFils || 0,
+      status: batchOrder.status,
+      storeBearsDeliveryCost: true
+    });
+
+    batchOrder.netSettlementFils = orderCalc.netSettlementFils;
+    batchOrder.discrepancyFils = orderCalc.discrepancyFils;
+
+    if (notes) {
+      batchOrder.notes = notes;
+    }
+
+    // Recalculate batch-level aggregates using pure accounting engine
+    const batchCalculations = calculateCourierBatchSettlement(
+      batch.orders.map(o => ({
+        orderId: o.orderId,
+        orderNumber: o.orderNumber,
+        codAmountFils: o.codAmountFils,
+        collectedCodFils: o.collectedCodFils,
+        deliveryFeeFils: o.deliveryFeeFils,
+        returnFeeFils: o.returnFeeFils || 0,
+        status: o.status,
+        storeBearsDeliveryCost: o.status === 'RETURNED' || o.status === 'CANCELLED'
+      })),
+      batch.remittances?.map(r => ({ amountFils: r.amountFils }))
+    );
+
+    batch.totalExpectedCodFils = batchCalculations.totalExpectedCodFils;
+    batch.totalCollectedCodFils = batchCalculations.totalCollectedCodFils;
+    batch.totalCodFils = batchCalculations.totalCollectedCodFils;
+    batch.totalDeliveryFeeFils = batchCalculations.totalDeliveryFeeFils;
+    batch.totalReturnFeeFils = batchCalculations.totalReturnFeeFils;
+    batch.totalCourierFeesFils = batchCalculations.totalCourierFeesFils;
+    batch.netSettlementFils = batchCalculations.netSettlementFils;
+    batch.storeReceivableFils = batchCalculations.storeReceivableFils;
+    batch.companyPayableFils = batchCalculations.companyPayableFils;
+    batch.deliveredOrdersCount = batchCalculations.deliveredOrdersCount;
+    batch.returnedOrdersCount = batchCalculations.returnedOrdersCount;
+    batch.inTransitOrdersCount = batchCalculations.inTransitOrdersCount;
+    batch.isPartialSettlement = batchCalculations.isPartialSettlement;
+    batch.remainingFils = batchCalculations.remainingBalanceFils;
+
+    if (batchCalculations.inTransitOrdersCount === 0) {
+      if (batch.netSettlementFils < 0) {
+        batch.status = batch.remainingFils <= 0 ? 'SETTLED' : 'CANCELLED';
+      } else {
+        batch.status = batch.remainingFils <= 0 ? 'SETTLED' : 'DELIVERED';
+      }
+    } else if (batchCalculations.deliveredOrdersCount > 0 || batchCalculations.returnedOrdersCount > 0) {
+      batch.status = 'PARTIALLY_DELIVERED';
+    }
+
+    batch.updatedAt = new Date().toISOString();
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/deliveries');
+    revalidatePath('/admin/orders');
+
+    return { success: true, batch, updatedOrder: batchOrder };
+  } catch (error: any) {
+    console.error('updateBatchOrderDeliveryStatusAction error:', error);
+    return { success: false, error: error.message || 'فشل تحديث حالة الطلب في الشحنة' };
+  }
+}
+
+/**
+ * Records an installment remittance payment from the courier company against a batch.
+ * Supports multiple partial payments.
+ */
+export async function recordCourierBatchRemittancePaymentAction(data: {
+  batchId: string;
+  amountFils: number;
+  receiptRef: string;
+  paidBy?: string;
+  notes?: string;
+}) {
+  try {
+    const { batchId, amountFils, receiptRef, paidBy, notes } = data;
+
+    if (!amountFils || amountFils <= 0) {
+      return { success: false, error: 'يرجى إدخال مبلغ توريد صحيح أكبر من صفر' };
+    }
+    if (!receiptRef || !receiptRef.trim()) {
+      return { success: false, error: 'يرجى إدخال رقم إشعار أو وصل التحويل البنكي' };
+    }
+
+    if (!memoryStoreState.courierBatches) {
+      return { success: false, error: 'سجل طلبيات الشحن غير موجود' };
+    }
+
+    const batch = memoryStoreState.courierBatches.find(b => b.id === batchId || b.batchNumber === batchId);
+    if (!batch) {
+      return { success: false, error: 'طلبية التوصيل غير موجودة' };
+    }
+
+    if (!batch.remittances) {
+      batch.remittances = [];
+    }
+
+    const remittance: CourierBatchRemittance = {
+      id: `rem-batch-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      amountFils: Math.round(amountFils),
+      receiptRef: receiptRef.trim(),
+      paidAt: new Date().toISOString(),
+      paidBy: paidBy || 'محاسب المعرض',
+      notes
+    };
+
+    batch.remittances.push(remittance);
+    batch.remittedFils = (batch.remittedFils || 0) + remittance.amountFils;
+
+    // Remaining balance accounting (handles positive store receivables and negative courier liabilities)
+    const targetSettlementFils = batch.netSettlementFils >= 0 ? batch.netSettlementFils : batch.companyPayableFils;
+    batch.remainingFils = Math.max(0, targetSettlementFils - batch.remittedFils);
+
+    if (batch.remainingFils <= 0 && batch.inTransitOrdersCount === 0) {
+      batch.status = 'SETTLED';
+    } else if (batch.remittedFils > 0) {
+      batch.status = 'PARTIALLY_SETTLED';
+    }
+
+    // Sync with central delivery settlement statement
+    if (memoryStoreState.deliverySettlement) {
+      const ds = memoryStoreState.deliverySettlement;
+      ds.remittances.unshift({
+        id: remittance.id,
+        receiptRef: `تسوية-شحنة-${batch.batchNumber}-${remittance.receiptRef}`,
+        amountFils: remittance.amountFils,
+        date: remittance.paidAt.split('T')[0],
+        notes: notes || `توريد دفعة من شركة التوصيل (${batch.courierName}) لشحنة #${batch.batchNumber}`,
+        status: 'CONFIRMED'
+      });
+      ds.remittedFils += remittance.amountFils;
+      ds.remainingFils = Math.max(0, ds.netSettlementExpectedFils - ds.remittedFils);
+    }
+
+    batch.updatedAt = new Date().toISOString();
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/deliveries');
+
+    return {
+      success: true,
+      remittance,
+      remittedFils: batch.remittedFils,
+      remainingFils: batch.remainingFils,
+      batchStatus: batch.status
+    };
+  } catch (error: any) {
+    console.error('recordCourierBatchRemittancePaymentAction error:', error);
+    return { success: false, error: error.message || 'فشل تسجيل دفعة التوريد' };
   }
 }

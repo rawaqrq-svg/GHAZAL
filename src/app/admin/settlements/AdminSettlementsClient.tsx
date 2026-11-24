@@ -18,6 +18,8 @@ import {
   CourierBatchOrderSummary,
   createCourierBatchAction,
   updateCourierBatchStatusAction,
+  recordCourierBatchRemittancePaymentAction,
+  updateBatchOrderDeliveryStatusAction,
   toggleProductVisibilityAction,
   recordDeliveryRemittancePayment,
   settleSingleDeliveryOrderAction,
@@ -26,6 +28,7 @@ import {
   addOperatingExpenseAction,
   deleteOperatingExpenseAction
 } from '@/actions/settlements';
+import { jodToFils } from '@/lib/money';
 import {
   DollarSign,
   ShoppingBag,
@@ -671,6 +674,48 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchFeedback, setBatchFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
+
+  // Batch Installment Remittance State
+  const [selectedBatchForRemittance, setSelectedBatchForRemittance] = useState<CourierBatchRecord | null>(null);
+  const [batchRemittanceAmount, setBatchRemittanceAmount] = useState<string>('');
+  const [batchRemittanceRef, setBatchRemittanceRef] = useState<string>('');
+  const [batchRemittanceNotes, setBatchRemittanceNotes] = useState<string>('');
+  const [isSubmittingBatchRemittance, setIsSubmittingBatchRemittance] = useState(false);
+
+  const handleRecordBatchRemittance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBatchForRemittance) return;
+    setIsSubmittingBatchRemittance(true);
+    try {
+      const amountFils = jodToFils(batchRemittanceAmount);
+      const res = await recordCourierBatchRemittancePaymentAction({
+        batchId: selectedBatchForRemittance.id,
+        amountFils,
+        receiptRef: batchRemittanceRef,
+        notes: batchRemittanceNotes
+      });
+      if (res.success) {
+        showToast(`تم تسجيل دفعة التوريد بنجاح (${batchRemittanceAmount} د.أ) لشحنة #${selectedBatchForRemittance.batchNumber}`);
+        setSelectedBatchForRemittance(null);
+        setBatchRemittanceAmount('');
+        setBatchRemittanceRef('');
+        setBatchRemittanceNotes('');
+        setCourierBatches(prev => prev.map(b => b.id === selectedBatchForRemittance.id ? {
+          ...b,
+          remittedFils: res.remittedFils ?? 0,
+          remainingFils: res.remainingFils ?? 0,
+          status: (res.batchStatus as any) || b.status,
+          remittances: [res.remittance!, ...(b.remittances || [])]
+        } : b));
+      } else {
+        showToast(res.error || 'فشل تسجيل الدفعة');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'خطأ أثناء تسجيل الدفعة');
+    } finally {
+      setIsSubmittingBatchRemittance(false);
+    }
+  };
 
   const handleToggleSelectPreparedOrder = (orderId: string) => {
     setSelectedPreparedOrderIds(prev => 
@@ -2391,18 +2436,47 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                               </td>
 
                               {/* COD المطلوب */}
-                              <td className="p-3 text-center font-mono font-bold text-slate-900">
-                                {formatMoney(batch.totalCodFils)} د.أ
+                              <td className="p-3 text-center">
+                                <div className="font-mono font-bold text-slate-900 text-xs">
+                                  {formatMoney(batch.totalCodFils)} د.أ
+                                </div>
+                                {batch.totalExpectedCodFils !== undefined && batch.totalExpectedCodFils !== batch.totalCodFils && (
+                                  <div className="text-[10px] text-slate-400 font-mono">
+                                    متوقع: {formatMoney(batch.totalExpectedCodFils)} د.أ
+                                  </div>
+                                )}
                               </td>
 
                               {/* أجرة التوصيل */}
-                              <td className="p-3 text-center font-mono font-bold text-rose-600 print:text-black">
-                                -{formatMoney(batch.totalDeliveryFeeFils)} د.أ
+                              <td className="p-3 text-center font-mono font-bold text-xs">
+                                <div className="text-rose-600 print:text-black">
+                                  -{formatMoney(batch.totalDeliveryFeeFils)} د.أ
+                                </div>
+                                {batch.totalReturnFeeFils !== undefined && batch.totalReturnFeeFils > 0 && (
+                                  <div className="text-amber-600 text-[10px] font-mono">
+                                    إرجاع: -{formatMoney(batch.totalReturnFeeFils)} د.أ
+                                  </div>
+                                )}
                               </td>
 
                               {/* الصافي بعد خصم التوصيل */}
-                              <td className="p-3 text-center font-mono font-black text-emerald-700 print:text-black text-sm">
-                                {formatMoney(batch.netSettlementFils)} د.أ
+                              <td className="p-3 text-center font-mono font-black text-sm">
+                                {batch.netSettlementFils < 0 ? (
+                                  <div className="flex flex-col items-center">
+                                    <span className="text-rose-700 font-black">-{formatMoney(Math.abs(batch.netSettlementFils))} د.أ</span>
+                                    <span className="text-[10px] text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200 mt-0.5">مستحق لشركة التوصيل ⚠️</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col items-center">
+                                    <span className="text-emerald-700 font-black">+{formatMoney(batch.netSettlementFils)} د.أ</span>
+                                    <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 mt-0.5">مستحق للمتجر</span>
+                                  </div>
+                                )}
+                                {batch.remittedFils !== undefined && batch.remittedFils > 0 && (
+                                  <div className="text-[10px] text-slate-500 mt-1">
+                                    مورّد: <span className="font-bold text-slate-700">{formatMoney(batch.remittedFils)}</span> | متبقي: <span className="font-bold text-amber-700">{formatMoney(batch.remainingFils ?? (batch.netSettlementFils - batch.remittedFils))}</span>
+                                  </div>
+                                )}
                               </td>
 
                               {/* حالة الطلبية */}
@@ -2413,10 +2487,16 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                                       ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
                                       : isDelivered
                                       ? 'bg-blue-50 text-blue-800 border-blue-300'
+                                      : batch.status === 'PARTIALLY_DELIVERED'
+                                      ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
+                                      : batch.status === 'PARTIALLY_SETTLED'
+                                      ? 'bg-teal-50 text-teal-800 border-teal-300'
                                       : batch.status === 'OUT_FOR_DELIVERY'
                                       ? 'bg-amber-50 text-amber-800 border-amber-300'
                                       : batch.status === 'CANCELLED'
                                       ? 'bg-rose-50 text-rose-800 border-rose-300'
+                                      : batch.status === 'LIABILITY_OWED'
+                                      ? 'bg-rose-100 text-rose-900 border-rose-400'
                                       : 'bg-purple-50 text-purple-800 border-purple-300'
                                   }`}
                                 >
@@ -2424,10 +2504,16 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                                     ? 'تمت التسوية وتوريد الكاش 💰'
                                     : isDelivered
                                     ? 'تم التسليم بالكامل ✓'
+                                    : batch.status === 'PARTIALLY_DELIVERED'
+                                    ? 'تسليم جزئي 📦'
+                                    : batch.status === 'PARTIALLY_SETTLED'
+                                    ? 'تسوية جزئية ⏳'
                                     : batch.status === 'OUT_FOR_DELIVERY'
                                     ? 'خرجت للتوصيل 🚚'
                                     : batch.status === 'CANCELLED'
                                     ? 'ملغاة ✗'
+                                    : batch.status === 'LIABILITY_OWED'
+                                    ? 'ذمة مستحقة لشركة الشحن ⚠️'
                                     : 'جاهزة بانتظار المندوب 📦'}
                                 </span>
                               </td>
@@ -2440,24 +2526,41 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                                     تمت التسوية ✓
                                   </span>
                                 ) : (
-                                  <button
-                                    type="button"
-                                    disabled={isSettling}
-                                    onClick={() => handleSettleBatch(batch)}
-                                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-white font-black text-xs transition shadow-xs cursor-pointer active:scale-95 disabled:opacity-50 ${
-                                      isDelivered
-                                        ? 'bg-emerald-600 hover:bg-emerald-700'
-                                        : 'bg-slate-900 hover:bg-black'
-                                    }`}
-                                    title="تسوية هذه الطلبية بالكامل وتوريد الصافي لحساب المتجر"
-                                  >
-                                    {isSettling ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <DollarSign className="w-3.5 h-3.5" />
-                                    )}
-                                    <span>تسوية الطلبية وتوريد الكاش</span>
-                                  </button>
+                                  <div className="flex flex-col gap-1 items-center">
+                                    <button
+                                      type="button"
+                                      disabled={isSettling}
+                                      onClick={() => handleSettleBatch(batch)}
+                                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-white font-black text-xs transition shadow-xs cursor-pointer active:scale-95 disabled:opacity-50 ${
+                                        isDelivered
+                                          ? 'bg-emerald-600 hover:bg-emerald-700'
+                                          : 'bg-slate-900 hover:bg-black'
+                                      }`}
+                                      title="تسوية هذه الطلبية بالكامل وتوريد الصافي لحساب المتجر"
+                                    >
+                                      {isSettling ? (
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      ) : (
+                                        <DollarSign className="w-3.5 h-3.5" />
+                                      )}
+                                      <span>تسوية كاملة</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedBatchForRemittance(batch);
+                                        const target = batch.netSettlementFils >= 0 ? batch.netSettlementFils : batch.companyPayableFils || Math.abs(batch.netSettlementFils);
+                                        const rem = Math.max(0, target - (batch.remittedFils || 0));
+                                        setBatchRemittanceAmount((rem / 1000).toFixed(3));
+                                        setBatchRemittanceRef(`CLIQ-${Date.now().toString().slice(-6)}`);
+                                        setBatchRemittanceNotes(`دفعة توريد لشحنة #${batch.batchNumber}`);
+                                      }}
+                                      className="text-[11px] font-bold text-teal-700 hover:text-teal-900 underline flex items-center gap-0.5 cursor-pointer"
+                                    >
+                                      + تسجيل دفعة توريد
+                                    </button>
+                                  </div>
                                 )}
                               </td>
                             </tr>
@@ -2466,26 +2569,108 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                             {isExpanded && (
                               <tr className="bg-slate-50/80">
                                 <td colSpan={8} className="p-4">
-                                  <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
-                                    <div className="flex items-center justify-between text-xs font-bold text-slate-700 border-b border-slate-100 pb-2">
-                                      <span>الطلبات المشمولة داخل طلبية الشحن #{batch.batchNumber}:</span>
-                                      <span className="text-slate-500 font-mono">تاريخ الإنشاء: {formatJordanDateTime(batch.createdAt)}</span>
+                                  <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs font-bold text-slate-700 border-b border-slate-100 pb-3 gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <Truck className="w-4 h-4 text-[#E6007E]" />
+                                        <span>تفاصيل الطلبات المشمولة داخل طلبية الشحن #{batch.batchNumber}:</span>
+                                      </div>
+                                      <div className="flex items-center gap-3 text-slate-500 font-mono text-[11px]">
+                                        <span>تاريخ الإنشاء: {formatJordanDateTime(batch.createdAt)}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setSelectedBatchForRemittance(batch);
+                                            const target = batch.netSettlementFils >= 0 ? batch.netSettlementFils : batch.companyPayableFils || Math.abs(batch.netSettlementFils);
+                                            const rem = Math.max(0, target - (batch.remittedFils || 0));
+                                            setBatchRemittanceAmount((rem / 1000).toFixed(3));
+                                            setBatchRemittanceRef(`CLIQ-${Date.now().toString().slice(-6)}`);
+                                            setBatchRemittanceNotes(`دفعة توريد لشحنة #${batch.batchNumber}`);
+                                          }}
+                                          className="px-2.5 py-1 bg-teal-50 text-teal-700 border border-teal-200 rounded-lg hover:bg-teal-100 font-bold transition cursor-pointer"
+                                        >
+                                          + تسجيل دفعة توريد للشحنة
+                                        </button>
+                                      </div>
                                     </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                                      {batch.orders.map((ord) => (
-                                        <div key={ord.orderId} className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs flex justify-between items-center">
-                                          <div>
-                                            <span className="font-mono font-black text-slate-900">#{ord.orderNumber}</span>
-                                            <span className="text-slate-700 block font-bold">{ord.customerName}</span>
-                                            <span className="text-[10px] text-slate-500 block">{ord.city}</span>
+
+                                    {/* Orders Grid */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                      {batch.orders.map((ord) => {
+                                        const isOrdDelivered = ord.status === 'DELIVERED' || ord.status === 'DELIVERED_COLLECTED';
+                                        const isOrdReturned = ord.status === 'RETURNED' || ord.status === 'CANCELLED';
+                                        const collected = ord.collectedCodFils !== undefined && ord.collectedCodFils !== null
+                                          ? ord.collectedCodFils
+                                          : (isOrdDelivered ? ord.codAmountFils : 0);
+
+                                        return (
+                                          <div key={ord.orderId} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-col justify-between space-y-2">
+                                            <div className="flex justify-between items-start">
+                                              <div>
+                                                <div className="flex items-center gap-1.5">
+                                                  <span className="font-mono font-black text-slate-900">#{ord.orderNumber}</span>
+                                                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${
+                                                    isOrdDelivered
+                                                      ? 'bg-emerald-100 text-emerald-800'
+                                                      : isOrdReturned
+                                                      ? 'bg-rose-100 text-rose-800'
+                                                      : 'bg-amber-100 text-amber-800'
+                                                  }`}>
+                                                    {isOrdDelivered ? 'تم التسليم ✓' : isOrdReturned ? 'مرتجع ✗' : 'قيد التوصيل 🚚'}
+                                                  </span>
+                                                </div>
+                                                <span className="text-slate-800 block font-bold mt-1">{ord.customerName}</span>
+                                                <span className="text-[10px] text-slate-500 block">{ord.city} {ord.customerPhone ? `• ${ord.customerPhone}` : ''}</span>
+                                              </div>
+
+                                              <div className="text-end font-mono">
+                                                {ord.netSettlementFils < 0 ? (
+                                                  <span className="font-black text-rose-700 block text-sm">-{formatMoney(Math.abs(ord.netSettlementFils))} د.أ</span>
+                                                ) : (
+                                                  <span className="font-black text-emerald-700 block text-sm">+{formatMoney(ord.netSettlementFils)} د.أ</span>
+                                                )}
+                                                <span className="text-[10px] text-slate-400 block">أجرة: {formatMoney(ord.deliveryFeeFils)} د.أ</span>
+                                              </div>
+                                            </div>
+
+                                            <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px] font-mono text-slate-600">
+                                              <span>مطلوب: {formatMoney(ord.codAmountFils)} د.أ</span>
+                                              <span>محصل: <strong className={collected > 0 ? 'text-blue-700' : 'text-slate-500'}>{formatMoney(collected)} د.أ</strong></span>
+                                              {ord.returnFeeFils !== undefined && ord.returnFeeFils > 0 && (
+                                                <span className="text-rose-600 font-bold">إرجاع: {formatMoney(ord.returnFeeFils)} د.أ</span>
+                                              )}
+                                              {ord.discrepancyFils !== undefined && ord.discrepancyFils !== 0 && (
+                                                <span className="text-amber-700 font-bold">فارق: {formatMoney(ord.discrepancyFils)} د.أ</span>
+                                              )}
+                                            </div>
+
+                                            {ord.notes && (
+                                              <p className="text-[10px] text-slate-500 bg-white p-1 rounded border border-slate-100 line-clamp-1">{ord.notes}</p>
+                                            )}
                                           </div>
-                                          <div className="text-end">
-                                            <span className="font-mono font-black text-emerald-700 block">{formatMoney(ord.netSettlementFils)} د.أ</span>
-                                            <span className="text-[10px] text-slate-400 font-mono block">أجرة: {formatMoney(ord.deliveryFeeFils)} د.أ</span>
-                                          </div>
+                                        );
+                                      })}
+                                    </div>
+
+                                    {/* Remittances Section if any */}
+                                    {batch.remittances && batch.remittances.length > 0 && (
+                                      <div className="pt-3 border-t border-slate-100 space-y-2">
+                                        <span className="text-xs font-bold text-slate-800 block">سجل دفعات التوريد المقبوضة لهذه الشحنة ({batch.remittances.length} دفعات):</span>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                          {batch.remittances.map((rem) => (
+                                            <div key={rem.id} className="p-2.5 rounded-lg bg-teal-50/60 border border-teal-200 text-xs flex justify-between items-center">
+                                              <div>
+                                                <span className="font-mono font-bold text-teal-900 block">{rem.receiptRef}</span>
+                                                <span className="text-[10px] text-teal-700 block">{formatJordanDateTime(rem.paidAt)} {rem.notes ? `• ${rem.notes}` : ''}</span>
+                                              </div>
+                                              <div className="font-mono font-black text-teal-800 text-sm">
+                                                {formatMoney(rem.amountFils)} د.أ
+                                              </div>
+                                            </div>
+                                          ))}
                                         </div>
-                                      ))}
-                                    </div>
+                                      </div>
+                                    )}
                                   </div>
                                 </td>
                               </tr>

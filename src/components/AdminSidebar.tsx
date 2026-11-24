@@ -9,7 +9,7 @@ import {
   Layers, Tag, Gift, DollarSign, RotateCcw, Users, FileText,
   BarChart3, Database, HardDrive, ShieldAlert, Settings, Truck,
   FileCode, LogOut, ChevronDown, Sparkles, ClipboardCheck, Boxes,
-  Menu, X, ChevronRight, ChevronLeft, CheckCircle2
+  Menu, X, ChevronRight, ChevronLeft, CheckCircle2, Activity
 } from 'lucide-react';
 
 interface AdminSidebarProps {
@@ -78,6 +78,7 @@ export function AdminSidebar({ employeeName, roleName = 'ADMIN' }: AdminSidebarP
         { href: '/admin/employees', label: 'الموظفون والصلاحيات', icon: Users },
         { href: '/admin/deliveries?tab=shipping-zones', label: 'أسعار التوصيل بالمحافظات', icon: Truck },
         { href: '/admin/content', label: 'إدارة واجهة المتجر (CMS)', icon: FileCode },
+        { href: '/admin/system-health', label: 'مركز صحة النظام والمزامنة والنسخ الاحتياطي', icon: Activity },
         { href: '/admin/system/retention', label: 'حفظ البيانات ومساحة التخزين (90/30 يوم)', icon: Database },
       ]
     }
