@@ -162,7 +162,7 @@ export async function validateSessionToken(token: string) {
     if (session) {
       globalSessions.delete(hashedToken);
       try {
-        await prisma.session.delete({ where: { id: session.id } });
+        await prisma.session.deleteMany({ where: { id: session.id } });
       } catch {}
     }
     return null;
@@ -178,7 +178,7 @@ export async function validateSessionToken(token: string) {
   if (now - session.createdAt.getTime() >= absoluteLifetimeMs) {
     globalSessions.delete(hashedToken);
     try {
-      await prisma.session.delete({ where: { id: session.id } });
+      await prisma.session.deleteMany({ where: { id: session.id } });
     } catch {}
     return null;
   }
@@ -189,7 +189,7 @@ export async function validateSessionToken(token: string) {
     if (now - session.lastActivityAt.getTime() >= idleTimeoutMs) {
       globalSessions.delete(hashedToken);
       try {
-        await prisma.session.delete({ where: { id: session.id } });
+        await prisma.session.deleteMany({ where: { id: session.id } });
       } catch {}
       return null;
     }
@@ -199,7 +199,7 @@ export async function validateSessionToken(token: string) {
   if (now >= session.expiresAt.getTime()) {
     globalSessions.delete(hashedToken);
     try {
-      await prisma.session.delete({ where: { id: session.id } });
+      await prisma.session.deleteMany({ where: { id: session.id } });
     } catch {}
     return null;
   }
@@ -208,7 +208,7 @@ export async function validateSessionToken(token: string) {
   session.lastActivityAt = new Date();
   if (isCashier) {
     try {
-      await prisma.session.update({
+      await prisma.session.updateMany({
         where: { id: session.id },
         data: {
           lastActivityAt: new Date()
@@ -218,7 +218,7 @@ export async function validateSessionToken(token: string) {
   } else {
     const newExpiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * SESSION_EXPIRATION_DAYS);
     try {
-      await prisma.session.update({
+      await prisma.session.updateMany({
         where: { id: session.id },
         data: {
           lastActivityAt: new Date(),

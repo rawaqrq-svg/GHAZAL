@@ -2665,32 +2665,46 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
 
             {/* Combined Operating & Cash Expenses Table */}
             {(() => {
-              const allExpensesCombined = [
-                ...operatingExpensesList.map(e => ({
-                  id: e.id,
-                  expenseNumber: e.expenseNumber,
-                  category: e.category,
-                  amountFils: e.amountFils,
-                  beneficiary: e.beneficiary,
-                  paymentMethod: e.paymentMethod,
-                  date: e.date,
-                  notes: e.notes,
-                  recordedBy: e.recordedBy,
-                  isCustomOpex: true
-                })),
-                ...filteredCashExpenses.map(e => ({
-                  id: e.id,
-                  expenseNumber: e.expenseNumber,
-                  category: e.category,
-                  amountFils: e.amountFils,
-                  beneficiary: e.beneficiary,
-                  paymentMethod: 'CASH' as const,
-                  date: e.date,
-                  notes: e.notes || 'مصروف مباشر من صندوق الكاشير',
-                  recordedBy: e.recordedBy,
-                  isCustomOpex: false
-                }))
-              ].filter(exp => {
+              const seenExpenseIds = new Set<string>();
+              const rawCombined: any[] = [];
+
+              for (const e of operatingExpensesList) {
+                if (e && e.id && !seenExpenseIds.has(e.id)) {
+                  seenExpenseIds.add(e.id);
+                  rawCombined.push({
+                    id: e.id,
+                    expenseNumber: e.expenseNumber,
+                    category: e.category,
+                    amountFils: e.amountFils,
+                    beneficiary: e.beneficiary,
+                    paymentMethod: e.paymentMethod,
+                    date: e.date,
+                    notes: e.notes,
+                    recordedBy: e.recordedBy,
+                    isCustomOpex: true
+                  });
+                }
+              }
+
+              for (const e of filteredCashExpenses) {
+                if (e && e.id && !seenExpenseIds.has(e.id)) {
+                  seenExpenseIds.add(e.id);
+                  rawCombined.push({
+                    id: e.id,
+                    expenseNumber: e.expenseNumber,
+                    category: e.category,
+                    amountFils: e.amountFils,
+                    beneficiary: e.beneficiary,
+                    paymentMethod: 'CASH' as const,
+                    date: e.date,
+                    notes: e.notes || 'مصروف مباشر من صندوق الكاشير',
+                    recordedBy: e.recordedBy,
+                    isCustomOpex: false
+                  });
+                }
+              }
+
+              const allExpensesCombined = rawCombined.filter(exp => {
                 if (expenseFilterCategory !== 'ALL' && exp.category !== expenseFilterCategory) return false;
                 if (expenseFilterStartDate && exp.date < expenseFilterStartDate) return false;
                 if (expenseFilterEndDate && exp.date > expenseFilterEndDate) return false;
@@ -2730,8 +2744,8 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                           </td>
                         </tr>
                       ) : (
-                        allExpensesCombined.map((exp) => (
-                          <tr key={exp.id} className="hover:bg-slate-50/70 transition-colors">
+                        allExpensesCombined.map((exp, idx) => (
+                          <tr key={`${exp.id || 'exp'}-${idx}`} className="hover:bg-slate-50/70 transition-colors">
                             <td className="p-3.5 font-mono font-black text-slate-800">{exp.expenseNumber}</td>
                             <td className="p-3.5 font-mono text-slate-500" dir="ltr">{exp.date}</td>
                             <td className="p-3.5">
