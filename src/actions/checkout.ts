@@ -8,6 +8,7 @@ import { getShippingZonesList } from '@/actions/shipping';
 import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
 import { recordRewardRedemptionForOrderAction } from '@/actions/rewards';
 import { saveDemoOrder, DemoOrder } from '@/lib/orders-catalog';
+import { sendNewOrderNotificationEmail } from '@/lib/email';
 
 const checkoutSchema = z.object({
   customerName: z.string().min(2, 'يرجى إدخال اسم المستلم الكامل (حرفين على الأقل)'),
@@ -364,6 +365,30 @@ export async function processCheckout(prevState: any, formData: FormData) {
       console.error('Error recording reward redemption:', err);
     }
   }
+
+  // Send Email Notification to Store Admin via Resend
+  sendNewOrderNotificationEmail({
+    reference,
+    customerName,
+    customerPhone,
+    zoneName,
+    address: detailedAddress || finalStreet,
+    items: orderItemsData.map((item: any) => ({
+      name: item.name,
+      size: item.size,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      total: item.total,
+      sku: item.sku
+    })),
+    subtotalFils: totalAmount,
+    shippingCostFils: shippingCost,
+    rewardDiscountFils,
+    grandTotalFils: grandTotal,
+    notes: addressNote
+  }).catch((emailErr) => {
+    console.error('Non-blocking: Failed to send new order email notification:', emailErr);
+  });
 
   // Get WhatsApp official number from database setting or default
   let whatsappNumber = '962785050655';
