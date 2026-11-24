@@ -1,0 +1,167 @@
+'use server';
+
+import { prisma } from '@/lib/db';
+import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
+import { getActivePromotions, computeProductPromotionPricing, findActivePromotionForProduct } from '@/lib/promotions';
+
+export async function getPaginatedProducts({
+  skip = 0,
+  take = 40,
+  categoryId = '',
+  genderId = '',
+  familyId = '',
+  q = '',
+  filter = '',
+  orderBy = 'createdAt_desc'
+}: {
+  skip?: number;
+  take?: number;
+  categoryId?: string;
+  genderId?: string;
+  familyId?: string;
+  q?: string;
+  filter?: string;
+  orderBy?: string;
+}) {
+  try {
+    const where: any = { isVisible: true };
+    
+    const cleanCategory = (categoryId === '*' || categoryId === 'all') ? '' : categoryId;
+    if (cleanCategory) {
+      const normalizedCategory = 
+        cleanCategory === 'perfumes' ? 'fragrances' :
+        cleanCategory === 'tools' ? 'beauty-tools' :
+        cleanCategory;
+
+      where.category = {
+        OR: [
+          { slug: normalizedCategory },
+          { slug: cleanCategory },
+          { id: cleanCategory }
+        ]
+      };
+    }
+
+    const activePromos = getActivePromotions('STOREFRONT');
+    const promoTargetIds = activePromos.map(p => p.targetProductId).filter(Boolean) as string[];
+
+    if (filter === 'offers') {
+      if (promoTargetIds.length > 0) {
+        where.OR = [
+          { id: { in: promoTargetIds } },
+          { slug: { in: promoTargetIds } }
+        ];
+      } else {
+        where.id = 'NO_ACTIVE_PROMOTIONS';
+      }
+    }
+
+    if (genderId) where.genderId = genderId;
+    if (familyId) where.familyId = familyId;
+    
+    if (q) {
+      where.OR = [
+        { nameAr: { contains: q, mode: 'insensitive' } },
+        { nameEn: { contains: q, mode: 'insensitive' } },
+        { sku: { contains: q, mode: 'insensitive' } }
+      ];
+    }
+
+    let products: any[] = [];
+    let total = 0;
+
+    try {
+      const [dbProducts, dbTotal] = await Promise.all([
+        prisma.product.findMany({
+          where,
+          skip,
+          take,
+          include: {
+            variants: { orderBy: { size: 'asc' } },
+            images: { orderBy: { order: 'asc' } },
+            category: true,
+            brand: true,
+          },
+          orderBy: { createdAt: 'desc' }
+        }),
+        prisma.product.count({ where })
+      ]);
+
+      products = dbProducts.map((p: any) => {
+        const lowestPrice = p.variants?.length > 0 ? Math.min(...p.variants.map((v: any) => v.price)) : 0;
+        const pricing = computeProductPromotionPricing({ ...p, priceFils: lowestPrice }, 'STOREFRONT', activePromos);
+
+        return {
+          ...p,
+          priceFils: pricing.priceFils,
+          originalPriceFils: pricing.originalPriceFils,
+          compareAtPriceFils: pricing.compareAtPriceFils,
+          discountPercent: pricing.discountPercent,
+          hasOffer: pricing.hasOffer,
+        };
+      });
+      total = dbTotal;
+    } catch (e) {
+      // Prisma offline or schema fallback
+    }
+
+    if (products.length === 0) {
+      let filtered = COSMETICS_CATALOG.filter(p => !p.isPOSOnly);
+
+      if (categoryId) {
+        const normalizedCategory = 
+          categoryId === 'perfumes' ? 'fragrances' :
+          categoryId === 'tools' ? 'beauty-tools' :
+          categoryId;
+        filtered = filtered.filter(p => 
+          p.categorySlug === normalizedCategory || 
+          p.categorySlug === categoryId || 
+          p.categoryId === categoryId
+        );
+      }
+
+      if (filter === 'offers') {
+        filtered = filtered.filter(p => findActivePromotionForProduct(p.id, p.slug, 'STOREFRONT', activePromos) !== null);
+      }
+
+      if (q) {
+        const lowerQ = q.toLowerCase();
+        filtered = filtered.filter(p => 
+          p.nameAr.toLowerCase().includes(lowerQ) || 
+          p.nameEn.toLowerCase().includes(lowerQ) ||
+          p.brandName.toLowerCase().includes(lowerQ)
+        );
+      }
+
+      total = filtered.length;
+      products = filtered.slice(skip, skip + take).map(p => {
+        const pricing = computeProductPromotionPricing(p, 'STOREFRONT', activePromos);
+
+        return {
+          id: p.id,
+          slug: p.slug,
+          nameAr: p.nameAr,
+          nameEn: p.nameEn,
+          category: { id: p.categoryId, name: p.categoryName, slug: p.categorySlug },
+          categoryId: p.categoryId,
+          brand: { name: p.brandName },
+          variants: p.variants,
+          images: p.images,
+          rating: p.rating,
+          isFeatured: p.isFeatured,
+          tag: pricing.hasOffer && pricing.discountPercent ? `خصم -${pricing.discountPercent}%` : p.tag,
+          priceFils: pricing.priceFils,
+          originalPriceFils: pricing.originalPriceFils,
+          compareAtPriceFils: pricing.compareAtPriceFils,
+          discountPercent: pricing.discountPercent,
+          hasOffer: pricing.hasOffer,
+        };
+      });
+    }
+
+    return { success: true, products, total };
+  } catch (error: any) {
+    console.error('Error fetching paginated products:', error);
+    return { success: false, products: [], total: 0 };
+  }
+}

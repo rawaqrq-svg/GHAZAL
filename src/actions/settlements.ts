@@ -1,0 +1,2323 @@
+'use server';
+
+import { prisma } from '@/lib/db';
+import { requireAuth } from '@/lib/dal';
+import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
+import { revalidatePath } from 'next/cache';
+import { formatJordanDateTime } from '@/lib/date';
+import { GHAZAL_DEMO_ORDERS, getDemoOrderById } from '@/lib/orders-catalog';
+
+// ====================================================================
+// TYPES & DATA STRUCTURES FOR SINGLE-STORE INVENTORY & SETTLEMENTS
+// ====================================================================
+
+export type StoreChannel = 'ALL' | 'POS' | 'ONLINE';
+
+export interface StoreInventoryItem {
+  id: string;
+  productId: string;
+  name: string;
+  sku: string;
+  barcode: string;
+  imageUrl?: string;
+  brand: string;
+  category: string;
+  specification: string; // Color, Shade, or Size
+  physicalStock: number; // الموجود فعلياً بالمحل
+  reservedStock: number; // المحجوز للطلبات المعلقة
+  availableStock: number; // المتاح للبيع = الموجود - المحجوز
+  unitCostFils: number; // تكلفة الشراء للقطعة بالفلس
+  sellingPriceFils: number; // سعر البيع للجمهور بالفلس
+  reorderLevel: number; // حد إعادة الطلب
+  channel: StoreChannel; // كاش وصالة العرض، المتجر الإلكتروني، أو كلاهما
+  isLowStock: boolean; // تنبيه الكمية منخفضة
+  isVisible: boolean; // حالة الظهور في المتجر والكاشير (زر الإخفاء)
+}
+
+export interface CashSaleRecord {
+  id: string;
+  receiptNumber: string;
+  date: string;
+  cashierName: string;
+  totalFils: number;
+  itemsCount: number;
+  paymentMethod: string;
+  customerName?: string;
+  status?: string;
+  isRefunded?: boolean;
+  isModified?: boolean;
+  refundAmountFils?: number;
+  notes?: string | null;
+}
+
+export interface CourierCompany {
+  id: string;
+  name: string;
+  phone: string;
+  type: 'COMPANY' | 'DELEGATE';
+  active: boolean;
+  defaultFeeFils?: number;
+  isDefaultStoreCourier?: boolean;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface OnlineOrderRecord {
+  id: string;
+  orderNumber: string;
+  date: string;
+  customerName: string;
+  city: string;
+  phone: string;
+  totalFils: number;
+  status: string;
+  paymentMethod: string;
+}
+
+export interface DeliveryOrderRecord {
+  id: string;
+  orderNumber: string;
+  companyName: string;
+  customerName: string;
+  city: string;
+  codAmountFils: number;
+  deliveryFeeFils: number;
+  netSettlementFils: number;
+  status: 'DELIVERED_COLLECTED' | 'IN_TRANSIT' | 'RETURNED' | 'SETTLED';
+  date: string;
+  settledAt?: string;
+  settledBy?: string;
+}
+
+export interface CourierBatchOrderSummary {
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  customerPhone: string;
+  city: string;
+  address?: string;
+  codAmountFils: number;
+  deliveryFeeFils: number;
+  netSettlementFils: number;
+  status: string;
+}
+
+export interface CourierBatchRecord {
+  id: string;
+  batchNumber: string; // رقم الطلبية (قابل للتعديل)
+  courierName: string; // شركة التوصيل أو اسم المندوب
+  status: 'PREPARED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'SETTLED' | 'CANCELLED';
+  orders: CourierBatchOrderSummary[];
+  totalCodFils: number;
+  totalDeliveryFeeFils: number;
+  netSettlementFils: number;
+  createdAt: string;
+  updatedAt: string;
+  notes?: string;
+}
+
+export type AuditSessionStatus = 
+  | 'DRAFT'            // مسودة: تم فتح الجرد ولم يبدأ العد
+  | 'IN_PROGRESS'      // قيد الجرد: الموظف يعدّ المنتجات
+  | 'NEEDS_REVIEW'     // يحتاج مراجعة: ظهر اختلاف في الكميات
+  | 'PENDING_APPROVAL' // بانتظار الاعتماد: تمت مراجعة الفروقات وتحتاج موافقة الإدارة
+  | 'COMPLETED';       // مكتمل: اعتمدت النتائج وسُجلت التصحيحات اللازمة
+
+export interface AuditSessionItem {
+  id: string;
+  sku: string;
+  name: string;
+  specification: string;
+  channel: StoreChannel;
+  bookStock: number; // الكمية المسجلة بالنظام
+  countedStock?: number; // الكمية التي عُدّت فعلياً
+  variance: number; // countedStock - bookStock
+  unitCostFils: number;
+  varianceValueFils: number; // الأثر المالي للفارق
+  reason?: string; // سبب الفرق: عجز، تلف، عينات تجربة، حركة غير مقيدة
+  status: 'MATCH' | 'SHORTAGE' | 'SURPLUS' | 'UNCOUNTED';
+  recounted: boolean; // هل تمت إعادة العد للتأكد؟
+  auditorNotes?: string;
+}
+
+export interface AuditSession {
+  id: string;
+  sessionNumber: string; // e.g., AUD-2026-001
+  channel: StoreChannel;
+  status: AuditSessionStatus;
+  auditorName: string;
+  approverName?: string;
+  createdAt: string;
+  approvedAt?: string;
+  totalItemsCount: number;
+  uncountedCount: number;
+  variancesCount: number;
+  totalBookValueFils: number;
+  totalCountedValueFils: number;
+  netVarianceFils: number;
+  items: AuditSessionItem[];
+}
+
+export type GoodsMovementType = 
+  | 'PURCHASE_RECEIPT'   // استلام مشتريات (دخول)
+  | 'ORDER_RESERVATION'  // حجز لطلب زبونة (حجز)
+  | 'ORDER_DISPATCH'     // خروج طلب للتوصيل (خروج)
+  | 'RESERVATION_RELEASE'// إلغاء حجز لطلب ملغى (تحرير)
+  | 'RETURN_RESTOCKED'   // مرتجع صالح وتمت إعادته للبيع (دخول)
+  | 'RETURN_DAMAGED'     // مرتجع تالف غير صالح للبيع (إتلاف)
+  | 'AUDIT_ADJUSTMENT';  // تسوية جرد بعد الاعتماد (تصحيح)
+
+export interface GoodsMovement {
+  id: string;
+  sku: string;
+  productName: string;
+  specification: string;
+  channel: StoreChannel;
+  type: GoodsMovementType;
+  reference: string; // رقم الطلب #ORD-101 أو فاتورة الشراء #PO-501 أو محضر الجرد
+  qtyBefore: number;
+  qtyChange: number; // موجب للدخول وتحرير الحجز، سالب للخروج والتلف
+  qtyAfter: number;
+  employeeName: string;
+  createdAt: string;
+  notes?: string;
+}
+
+export interface DeliverySettlementStatement {
+  companyName: string;
+  period: string;
+  codRequiredFils: number; // COD المطلوب من الزبائن (200.000)
+  codCollectedFils: number; // COD المحصل فعلياً (180.000)
+  deliveryFeesDeductibleFils: number; // رسوم التوصيل القابلة للخصم (15.000)
+  netSettlementExpectedFils: number; // صافي التوريد المتوقع (165.000)
+  remittedFils: number; // تم توريده فعلياً للحساب (120.000)
+  remainingFils: number; // المتبقي للتوريد (45.000)
+  remittances: Array<{
+    id: string;
+    receiptRef: string;
+    amountFils: number;
+    date: string;
+    notes?: string;
+    status: 'CONFIRMED' | 'PENDING';
+  }>;
+}
+
+export interface CashDrawerSettlement {
+  id: string;
+  date: string;
+  shiftName: string;
+  cashierName: string;
+  expectedCashFils: number; // النقد المتوقع بالصندوق (150.000)
+  countedCashFils: number; // النقد المعدود فعلياً (145.000)
+  varianceFils: number; // الفرق: -5.000 (نقص)
+  status: 'RECONCILED' | 'VARIANCE_PENDING' | 'APPROVED';
+  notes?: string;
+  approvedBy?: string;
+}
+
+export interface BankSettlement {
+  id: string;
+  date: string;
+  source: 'POS_CARD' | 'ONLINE_GATEWAY';
+  systemRecordedFils: number;
+  bankDepositedFils: number;
+  varianceFils: number;
+  referenceNumber: string;
+  status: 'SETTLED' | 'PENDING_CLEARING';
+  notes?: string;
+}
+
+export interface PurchaseInvoice {
+  id: string;
+  invoiceNumber: string;
+  supplierName: string;
+  supplierPhone?: string;
+  items: Array<{
+    sku: string;
+    name: string;
+    quantity: number;
+    unitCostFils: number;
+    totalFils: number;
+  }>;
+  totalCostFils: number;
+  paymentStatus: 'PAID' | 'CREDIT' | 'PARTIAL';
+  deliveryStatus: 'RECEIVED' | 'IN_TRANSIT';
+  paidAmountFils: number;
+  remainingAmountFils: number;
+  createdAt: string;
+  notes?: string;
+}
+
+export interface OperatingExpense {
+  id: string;
+  expenseNumber: string;
+  category: 'إيجار المحل' | 'فواتير الكهرباء' | 'فواتير المياه والإنترنت' | 'إعلانات وتسويق' | 'إيجار المعرض' | 'رواتب ومكافآت' | 'تغليف ومستلزمات' | 'استضافة وبرمجيات' | 'صيانة ومصاريف عامة' | string;
+  amountFils: number;
+  beneficiary: string;
+  paymentMethod: 'CASH' | 'BANK';
+  paymentStatus: 'PAID' | 'DUE';
+  date: string;
+  recordedBy: string;
+  proofAttachment?: string;
+  notes?: string;
+}
+
+// ====================================================================
+// IN-MEMORY RESILIENT DATA STATE (جاهز ومطابق لتصور المحل الواحد)
+// ====================================================================
+
+interface StoreSettlementsState {
+  inventory: Record<string, {
+    physicalStock: number;
+    reservedStock: number;
+    unitCostFils: number;
+    reorderLevel: number;
+    channel: StoreChannel;
+  }>;
+  auditSessions: AuditSession[];
+  goodsMovements: GoodsMovement[];
+  deliverySettlement: DeliverySettlementStatement;
+  cashDrawerSettlements: CashDrawerSettlement[];
+  bankSettlements: BankSettlement[];
+  purchaseInvoices: PurchaseInvoice[];
+  operatingExpenses: OperatingExpense[];
+  deliveryOrders: DeliveryOrderRecord[];
+  courierBatches?: CourierBatchRecord[];
+  courierCompanies?: CourierCompany[];
+}
+
+const memoryStoreState: StoreSettlementsState = (globalThis as any).__ghazal_store_settlements_state || {
+  inventory: {
+    'MAY-VIN-020': { physicalStock: 20, reservedStock: 3, unitCostFils: 7500, reorderLevel: 5, channel: 'ALL' },
+    'LOR-TRUE-3N': { physicalStock: 12, reservedStock: 2, unitCostFils: 11000, reorderLevel: 4, channel: 'POS' },
+    'THE-NIAC-30': { physicalStock: 25, reservedStock: 4, unitCostFils: 5500, reorderLevel: 6, channel: 'ONLINE' },
+    'HUDA-FAUX-100': { physicalStock: 8, reservedStock: 1, unitCostFils: 18000, reorderLevel: 3, channel: 'ALL' },
+    'MAC-LIP-VELVET': { physicalStock: 15, reservedStock: 0, unitCostFils: 14000, reorderLevel: 5, channel: 'POS' },
+    'ANAS-DIP-MED': { physicalStock: 6, reservedStock: 2, unitCostFils: 12000, reorderLevel: 3, channel: 'ALL' },
+    'CER-HYDR-473': { physicalStock: 18, reservedStock: 3, unitCostFils: 8500, reorderLevel: 5, channel: 'ONLINE' },
+    'NARS-BLUSH-ORG': { physicalStock: 3, reservedStock: 1, unitCostFils: 19000, reorderLevel: 4, channel: 'ALL' }, // Low stock!
+    'CHAR-AIR-FAIR': { physicalStock: 4, reservedStock: 1, unitCostFils: 22000, reorderLevel: 4, channel: 'POS' }, // Low stock!
+    'RARE-BLUSH-HOPE': { physicalStock: 2, reservedStock: 0, unitCostFils: 15000, reorderLevel: 3, channel: 'ALL' }, // Low stock!
+    'FENT-GLOSS-FENT': { physicalStock: 10, reservedStock: 2, unitCostFils: 13000, reorderLevel: 4, channel: 'ONLINE' }
+  },
+  auditSessions: [
+    {
+      id: 'aud-001',
+      sessionNumber: 'AUD-2026-001',
+      channel: 'ALL',
+      status: 'NEEDS_REVIEW',
+      auditorName: 'أحمد القضاة (أمين المستودع)',
+      createdAt: '2026-11-19T14:30:00.000Z',
+      totalItemsCount: 5,
+      uncountedCount: 0,
+      variancesCount: 2,
+      totalBookValueFils: 145000,
+      totalCountedValueFils: 133000,
+      netVarianceFils: -12000, // 12 JOD نقص
+      items: [
+        {
+          id: 'item-1',
+          sku: 'MAY-VIN-020',
+          name: 'أحمر شفاه مايبيلين سوبر ستاي فينيل إنك',
+          specification: '020 Coy',
+          channel: 'ALL',
+          bookStock: 20,
+          countedStock: 18,
+          variance: -2,
+          unitCostFils: 7500,
+          varianceValueFils: -15000,
+          reason: 'نقص قطعتين - عينات تجربة للزبائن (تستر) في صالة العرض',
+          status: 'SHORTAGE',
+          recounted: true,
+          auditorNotes: 'تمت إعادة العد مرتين والتأكد من صالة العرض'
+        },
+        {
+          id: 'item-2',
+          sku: 'LOR-TRUE-3N',
+          name: 'كريم أساس لوريال ترو ماتش',
+          specification: '3N Creamy Beige',
+          channel: 'POS',
+          bookStock: 12,
+          countedStock: 12,
+          variance: 0,
+          unitCostFils: 11000,
+          varianceValueFils: 0,
+          reason: '',
+          status: 'MATCH',
+          recounted: false
+        },
+        {
+          id: 'item-3',
+          sku: 'THE-NIAC-30',
+          name: 'سيروم ذا أورديناري نياسيناميد 10% + زنك 1%',
+          specification: '30ml',
+          channel: 'ONLINE',
+          bookStock: 22,
+          countedStock: 25,
+          variance: 3,
+          unitCostFils: 5500,
+          varianceValueFils: 16500,
+          reason: 'زيادة 3 قطع - إضافة من طلبية التوريد الأخيرة لم تقيّد',
+          status: 'SURPLUS',
+          recounted: false
+        },
+        {
+          id: 'item-4',
+          sku: 'NARS-BLUSH-ORG',
+          name: 'بلاشر نارس أورجازم السائل',
+          specification: '15ml Orgasm',
+          channel: 'ALL',
+          bookStock: 4,
+          countedStock: 3,
+          variance: -1,
+          unitCostFils: 19000,
+          varianceValueFils: -19000,
+          reason: 'تلف عبوة أثناء المناولة على الرف',
+          status: 'SHORTAGE',
+          recounted: true
+        },
+        {
+          id: 'item-5',
+          sku: 'HUDA-FAUX-100',
+          name: 'كريم أساس هدى بيوتي فوكس فلتر',
+          specification: '35ml Chai 210B',
+          channel: 'ALL',
+          bookStock: 8,
+          countedStock: 8,
+          variance: 0,
+          unitCostFils: 18000,
+          varianceValueFils: 0,
+          status: 'MATCH',
+          recounted: false
+        }
+      ]
+    }
+  ],
+  goodsMovements: [
+    {
+      id: 'mov-101',
+      sku: 'MAY-VIN-020',
+      productName: 'أحمر شفاه مايبيلين سوبر ستاي فينيل إنك',
+      specification: '020 Coy',
+      channel: 'ALL',
+      type: 'PURCHASE_RECEIPT',
+      reference: 'PO-2026-101',
+      qtyBefore: 10,
+      qtyChange: 15,
+      qtyAfter: 25,
+      employeeName: 'أحمد القضاة (المستودع)',
+      createdAt: '2026-11-18T10:00:00.000Z',
+      notes: 'استلام بضاعة مورد - فاتورة توريد محلية'
+    },
+    {
+      id: 'mov-102',
+      sku: 'MAY-VIN-020',
+      productName: 'أحمر شفاه مايبيلين سوبر ستاي فينيل إنك',
+      specification: '020 Coy',
+      channel: 'ALL',
+      type: 'ORDER_RESERVATION',
+      reference: 'ORD-5481',
+      qtyBefore: 25,
+      qtyChange: -3,
+      qtyAfter: 22,
+      employeeName: 'سارة خالد (المتجر الإلكتروني)',
+      createdAt: '2026-11-19T11:20:00.000Z',
+      notes: 'حجز 3 قطع لطلبية توصيل زبونة'
+    },
+    {
+      id: 'mov-103',
+      sku: 'LOR-TRUE-3N',
+      productName: 'كريم أساس لوريال ترو ماتش',
+      specification: '3N Creamy Beige',
+      channel: 'POS',
+      type: 'ORDER_DISPATCH',
+      reference: 'ORD-5479',
+      qtyBefore: 14,
+      qtyChange: -2,
+      qtyAfter: 12,
+      employeeName: 'محمود العمري (الكاشير)',
+      createdAt: '2026-11-19T12:45:00.000Z',
+      notes: 'خروج مع مندوب شركة أرامكس للتوصيل'
+    },
+    {
+      id: 'mov-104',
+      sku: 'THE-NIAC-30',
+      productName: 'سيروم ذا أورديناري نياسيناميد',
+      specification: '30ml',
+      channel: 'ONLINE',
+      type: 'RETURN_RESTOCKED',
+      reference: 'RET-201',
+      qtyBefore: 24,
+      qtyChange: 1,
+      qtyAfter: 25,
+      employeeName: 'أحمد القضاة (المستودع)',
+      createdAt: '2026-11-19T16:15:00.000Z',
+      notes: 'مرتجع صالح بحالة المصنع المغلفة بعد الفحص والمعاينة'
+    },
+    {
+      id: 'mov-105',
+      sku: 'NARS-BLUSH-ORG',
+      productName: 'بلاشر نارس أورجازم السائل',
+      specification: '15ml Orgasm',
+      channel: 'ALL',
+      type: 'AUDIT_ADJUSTMENT',
+      reference: 'AUD-2026-001',
+      qtyBefore: 4,
+      qtyChange: -1,
+      qtyAfter: 3,
+      employeeName: 'إدارة المحل',
+      createdAt: '2026-11-19T18:00:00.000Z',
+      notes: 'تسوية عجز جرد بعد اعتماد محضر التلف'
+    }
+  ],
+  deliverySettlement: {
+    companyName: 'شركة التوصيل الوطنية (سريعة اكسبرس)',
+    period: 'الأسبوع الحالي (14 - 20 تشرين الثاني 2026)',
+    codRequiredFils: 200000, // 200.000 JOD
+    codCollectedFils: 180000, // 180.000 JOD
+    deliveryFeesDeductibleFils: 15000, // 15.000 JOD
+    netSettlementExpectedFils: 165000, // 165.000 JOD
+    remittedFils: 120000, // 120.000 JOD
+    remainingFils: 45000, // 45.000 JOD
+    remittances: [
+      {
+        id: 'rem-1',
+        receiptRef: 'TRF-BANK-9941',
+        amountFils: 120000,
+        date: '2026-11-18',
+        notes: 'إيداع بنكي لحساب المحل عبر كليك',
+        status: 'CONFIRMED'
+      }
+    ]
+  },
+  cashDrawerSettlements: [
+    {
+      id: 'csh-01',
+      date: '2026-11-19',
+      shiftName: 'الوردية المسائية (صالة المعرض)',
+      cashierName: 'محمود العمري (كاشير غزل)',
+      expectedCashFils: 150000, // 150.000 JOD
+      countedCashFils: 145000, // 145.000 JOD
+      varianceFils: -5000, // نقص 5 دنانير
+      status: 'VARIANCE_PENDING',
+      notes: 'فرق 5 دنانير تحت المراجعة - احتمال باقي متبقي لزبونة',
+      approvedBy: 'مدير النظام'
+    },
+    {
+      id: 'csh-02',
+      date: '2026-11-18',
+      shiftName: 'الوردية الصباحية (صالة المعرض)',
+      cashierName: 'محمود العمري (كاشير غزل)',
+      expectedCashFils: 110000,
+      countedCashFils: 110000,
+      varianceFils: 0,
+      status: 'APPROVED',
+      notes: 'مطابق تماماً مع فواتير الكاشير',
+      approvedBy: 'مدير النظام'
+    }
+  ],
+  bankSettlements: [
+    {
+      id: 'bnk-01',
+      date: '2026-11-19',
+      source: 'POS_CARD',
+      systemRecordedFils: 340000,
+      bankDepositedFils: 340000,
+      varianceFils: 0,
+      referenceNumber: 'MEPS-BATCH-8812',
+      status: 'SETTLED',
+      notes: 'حركات جهاز نقاط البيع (البنك الأردني الكويتي)'
+    },
+    {
+      id: 'bnk-02',
+      date: '2026-11-19',
+      source: 'ONLINE_GATEWAY',
+      systemRecordedFils: 125000,
+      bankDepositedFils: 125000,
+      varianceFils: 0,
+      referenceNumber: 'PAY-ONLINE-3341',
+      status: 'SETTLED',
+      notes: 'دفعات فيزا/ماستركارد لطلبات المتجر الإلكتروني'
+    }
+  ],
+  purchaseInvoices: [
+    {
+      id: 'po-101',
+      invoiceNumber: 'PO-2026-101',
+      supplierName: 'شركة النقاء للتجارة والتوزيع (وكيل لوريال ومايبيلين)',
+      supplierPhone: '0795551234',
+      items: [
+        { sku: 'MAY-VIN-020', name: 'أحمر شفاه مايبيلين سوبر ستاي', quantity: 20, unitCostFils: 7500, totalFils: 150000 },
+        { sku: 'LOR-TRUE-3N', name: 'كريم أساس لوريال ترو ماتش', quantity: 15, unitCostFils: 11000, totalFils: 165000 }
+      ],
+      totalCostFils: 315000, // 315 JOD
+      paymentStatus: 'PAID',
+      deliveryStatus: 'RECEIVED',
+      paidAmountFils: 315000,
+      remainingAmountFils: 0,
+      createdAt: '2026-11-15T09:00:00.000Z',
+      notes: 'مدفوع نقداً عند الاستلام ومطابق للفاتورة الورقية رقم 9844'
+    },
+    {
+      id: 'po-102',
+      invoiceNumber: 'PO-2026-102',
+      supplierName: 'مؤسسة الجمال الكندية (وكيل ذا أورديناري)',
+      supplierPhone: '0788884321',
+      items: [
+        { sku: 'THE-NIAC-30', name: 'سيروم ذا أورديناري نياسيناميد', quantity: 30, unitCostFils: 5500, totalFils: 165000 }
+      ],
+      totalCostFils: 165000, // 165 JOD
+      paymentStatus: 'CREDIT',
+      deliveryStatus: 'RECEIVED',
+      paidAmountFils: 65000,
+      remainingAmountFils: 100000, // 100 JOD مستحق
+      createdAt: '2026-11-17T11:30:00.000Z',
+      notes: 'تم دفع 65 دينار وباقي 100 دينار آجل لنهاية الشهر'
+    }
+  ],
+  operatingExpenses: [
+    {
+      id: 'exp-01',
+      expenseNumber: 'EXP-101',
+      category: 'إعلانات وتسويق',
+      amountFils: 65000, // 65 JOD
+      beneficiary: 'حملة إعلانات تيك توك وإنستغرام',
+      paymentMethod: 'BANK',
+      paymentStatus: 'PAID',
+      date: '2026-11-17',
+      recordedBy: 'إدارة التسويق',
+      notes: 'تمويل فيديو ريلز العروض الترويجية'
+    },
+    {
+      id: 'exp-02',
+      expenseNumber: 'EXP-102',
+      category: 'تغليف ومستلزمات',
+      amountFils: 35000, // 35 JOD
+      beneficiary: 'مطبعة الأكياس والكرتون الفاخر',
+      paymentMethod: 'CASH',
+      paymentStatus: 'PAID',
+      date: '2026-11-18',
+      recordedBy: 'كاشير غزل',
+      notes: 'أكياس هدايا ورقية وشرائط تغليف لطلبات المتجر'
+    },
+    {
+      id: 'exp-03',
+      expenseNumber: 'EXP-103',
+      category: 'إيجار المعرض',
+      amountFils: 300000, // 300 JOD
+      beneficiary: 'مالك العقار (عين الباشا)',
+      paymentMethod: 'BANK',
+      paymentStatus: 'PAID',
+      date: '2026-11-01',
+      recordedBy: 'مدير النظام',
+      notes: 'إيجار شهر تشرين الثاني 2026'
+    }
+  ],
+  courierCompanies: (globalThis as any).__ghazal_courier_companies || [
+    {
+      id: 'comp-1',
+      name: 'سريعة إكسبرس',
+      phone: '0791112233',
+      type: 'COMPANY',
+      active: true,
+      isDefaultStoreCourier: true,
+      defaultFeeFils: 2500,
+      notes: 'الشركة المعتمدة الرئيسية للتوصيل لكافة محافظات المملكة',
+      createdAt: '2026-01-01'
+    },
+    {
+      id: 'comp-2',
+      name: 'أرامكس (Aramex)',
+      phone: '065358899',
+      type: 'COMPANY',
+      active: true,
+      isDefaultStoreCourier: false,
+      defaultFeeFils: 3000,
+      notes: 'شحنات المحافظات البعيدة والمستعجلة',
+      createdAt: '2026-01-05'
+    },
+    {
+      id: 'comp-3',
+      name: 'مندوب غزل الخاص (عين الباشا)',
+      phone: '0795554433',
+      type: 'DELEGATE',
+      active: true,
+      isDefaultStoreCourier: false,
+      defaultFeeFils: 1500,
+      notes: 'توصيل محلي فوري داخل لواء عين الباشا ومخيم البقعة',
+      createdAt: '2026-01-10'
+    }
+  ]
+};
+
+(globalThis as any).__ghazal_store_settlements_state = memoryStoreState;
+
+// ====================================================================
+// CORE GETTER FOR DASHBOARD & ALL 6 SECTIONS
+// ====================================================================
+
+export async function getSettlementsDashboardData(channelFilter?: string) {
+  const currentChannel: StoreChannel = (channelFilter === 'POS' || channelFilter === 'ONLINE') ? channelFilter : 'ALL';
+
+  // 1. Compile inventory list matching COSMETICS_CATALOG
+  const inventoryList: StoreInventoryItem[] = [];
+
+  for (const prod of COSMETICS_CATALOG) {
+    for (const v of prod.variants) {
+      const stateItem = memoryStoreState.inventory[v.sku] || {
+        physicalStock: v.stock ?? 15,
+        reservedStock: Math.floor(Math.random() * 3),
+        unitCostFils: Math.round(v.price * 0.7),
+        reorderLevel: 4,
+        channel: 'ALL' as StoreChannel
+      };
+
+      const itemChannel = stateItem.channel;
+
+      // Filter by channel if requested (unless ALL is selected)
+      if (currentChannel !== 'ALL' && itemChannel !== 'ALL' && itemChannel !== currentChannel) {
+        continue;
+      }
+
+      const physicalStock = stateItem.physicalStock;
+      const reservedStock = stateItem.reservedStock;
+      const availableStock = Math.max(0, physicalStock - reservedStock);
+      const isLowStock = availableStock <= stateItem.reorderLevel;
+
+      const hiddenSet: Set<string> = (globalThis as any).__ghazal_hidden_products || new Set<string>();
+      const isVisible = !hiddenSet.has(prod.id);
+
+      inventoryList.push({
+        id: v.id,
+        productId: prod.id,
+        name: prod.nameAr,
+        sku: v.sku,
+        barcode: v.barcode || `628100${v.id.replace(/\D/g, '').padEnd(6, '0')}`,
+        imageUrl: prod.images?.[0]?.url || '/logo.png',
+        brand: prod.brandName || 'غزل',
+        category: prod.categoryName || 'مستحضرات تجميل',
+        specification: v.size || v.shade || v.colorName || 'قياسي',
+        physicalStock,
+        reservedStock,
+        availableStock,
+        unitCostFils: stateItem.unitCostFils,
+        sellingPriceFils: v.price,
+        reorderLevel: stateItem.reorderLevel,
+        channel: itemChannel,
+        isLowStock,
+        isVisible
+      });
+    }
+  }
+
+  // 2. Fetch real POS sales from DB and in-memory log for 100% synchronization
+  let realCashSalesList: CashSaleRecord[] = [];
+  let dbSalesTotalFils = 0;
+
+  try {
+    const dbSales = await prisma.sale.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: {
+        items: true,
+        payments: true,
+        employee: { select: { name: true } },
+        invoice: { select: { number: true } }
+      }
+    });
+
+    if (dbSales && dbSales.length > 0) {
+      realCashSalesList = dbSales.map(s => {
+        const pm = s.payments[0]?.method || 'CASH';
+        let methodLabel = 'نقد (كاش)';
+        if (pm === 'CARD') methodLabel = 'بطاقة POS';
+        else if (pm === 'WALLET') methodLabel = 'محفظة إلكترونية';
+        else if (pm === 'CREDIT') methodLabel = 'آجل (ذمم)';
+
+        const dateStr = formatJordanDateTime(s.completedAt || s.createdAt);
+        return {
+          id: s.id,
+          receiptNumber: s.invoice?.number || s.reference,
+          date: dateStr,
+          cashierName: s.sellerNameSnapshot || s.employee?.name || 'كاشير غزل (عين الباشا)',
+          totalFils: s.total,
+          itemsCount: s.items.reduce((sum, it) => sum + (it.quantity || 1), 0),
+          paymentMethod: methodLabel,
+          customerName: s.customerName || 'عميل نقدي',
+          status: s.status,
+          isRefunded: s.status === 'REFUNDED',
+          isModified: ((s as any).notes && (s as any).notes.includes('تعديل')) || false,
+          refundAmountFils: s.status === 'REFUNDED' ? s.total : 0,
+          notes: (s as any).notes || null
+        };
+      });
+      dbSalesTotalFils = dbSales.reduce((acc, s) => acc + s.total, 0);
+    }
+  } catch (err) {
+    console.warn('Prisma sales lookup fallback for settlements:', err);
+  }
+
+  // Merge resilient sales log
+  const inMemSalesLog: any[] = (globalThis as any).__ghazal_pos_sales_log || [];
+  for (const s of inMemSalesLog) {
+    if (!realCashSalesList.some(r => r.id === s.saleId || r.receiptNumber === s.reference || r.receiptNumber === s.invoiceNumber)) {
+      const pm = s.paymentMethod || 'CASH';
+      let methodLabel = 'نقد (كاش)';
+      if (pm === 'CARD') methodLabel = 'بطاقة POS';
+      else if (pm === 'WALLET') methodLabel = 'محفظة إلكترونية';
+      else if (pm === 'CREDIT') methodLabel = 'آجل (ذمم)';
+
+      const dateStr = formatJordanDateTime(s.createdAt ? new Date(s.createdAt) : new Date());
+      realCashSalesList.unshift({
+        id: s.saleId || `sale-${Date.now()}`,
+        receiptNumber: s.invoiceNumber || s.reference,
+        date: dateStr,
+        cashierName: s.cashierName || 'كاشير غزل (عين الباشا)',
+        totalFils: s.total,
+        itemsCount: (s.items || []).reduce((sum: number, it: any) => sum + (it.quantity || 1), 0),
+        paymentMethod: methodLabel,
+        customerName: s.customerName || 'عميل نقدي',
+        status: s.status || (s.isRefunded ? 'REFUNDED' : (s.isModified ? 'MODIFIED' : 'COMPLETED')),
+        isRefunded: s.isRefunded || s.status === 'REFUNDED',
+        isModified: s.isModified || false,
+        refundAmountFils: s.refundAmountFils || 0,
+        notes: s.notes || null
+      });
+      dbSalesTotalFils += s.total;
+    }
+  }
+
+  if (realCashSalesList.length === 0) {
+    realCashSalesList = [
+      { id: 'sale-1', receiptNumber: 'POS-2026-901', date: '2026-11-20 10:15 AM', cashierName: 'محمود العمري (كاشير غزل)', totalFils: 24500, itemsCount: 3, paymentMethod: 'نقد (كاش)', customerName: 'زبونة نقدية' },
+      { id: 'sale-2', receiptNumber: 'POS-2026-902', date: '2026-11-20 09:40 AM', cashierName: 'محمود العمري (كاشير غزل)', totalFils: 18000, itemsCount: 2, paymentMethod: 'نقد (كاش)', customerName: 'سارة العبداللات' },
+      { id: 'sale-3', receiptNumber: 'POS-2026-903', date: '2026-11-19 06:25 PM', cashierName: 'محمود العمري (كاشير غزل)', totalFils: 32000, itemsCount: 4, paymentMethod: 'بطاقة POS', customerName: 'زبونة نقدية' }
+    ];
+    dbSalesTotalFils = 74500;
+  }
+
+  // Ensure cash sales are strictly ordered newest first
+  realCashSalesList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  // Load real online orders
+  let realOnlineOrders: OnlineOrderRecord[] = [];
+  let onlineSalesTotalFils = 0;
+
+  try {
+    const dbOrders = await prisma.order.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100
+    });
+    if (dbOrders && dbOrders.length > 0) {
+      realOnlineOrders = dbOrders.map(o => ({
+        id: o.id,
+        orderNumber: o.reference,
+        date: formatJordanDateTime(o.createdAt),
+        customerName: o.customerName,
+        city: (o as any).city || 'عمّان',
+        phone: o.customerPhone,
+        totalFils: o.totalAmount,
+        status: o.status,
+        paymentMethod: (o as any).paymentMethod === 'CARD' ? 'بطاقة دفع إلكتروني' : 'دفع عند الاستلام COD'
+      }));
+    }
+  } catch (e) {}
+
+  // Include ALL GHAZAL_DEMO_ORDERS so that demo orders are officially recognized across settlements, P&L, and filters
+  for (const ord of GHAZAL_DEMO_ORDERS) {
+    if (!realOnlineOrders.some(o => o.id === ord.id || o.orderNumber === ord.reference)) {
+      let statusLabel = 'طلب جديد';
+      if (ord.status === 'PREPARED') statusLabel = 'تم التجهيز بانتظار الشحن';
+      else if (ord.status === 'SHIPPED') statusLabel = 'خرج للتوصيل مع المندوب 🚚';
+      else if (ord.status === 'DELIVERED') statusLabel = 'تم التسليم بالكامل ✓';
+      else if (ord.status === 'CANCELLED') statusLabel = 'ملغي ❌';
+      else if (ord.status === 'PREPARING' || ord.status === 'CONFIRMED') statusLabel = 'مؤكد وقيد التجهيز';
+
+      const city = ord.addressStreet ? ord.addressStreet.split('-')[0].trim() : 'عين الباشا';
+
+      realOnlineOrders.push({
+        id: ord.id,
+        orderNumber: ord.reference,
+        date: formatJordanDateTime(new Date(ord.createdAt)),
+        customerName: ord.customerName,
+        city: city || 'عين الباشا',
+        phone: ord.customerPhone,
+        totalFils: ord.totalAmount,
+        status: statusLabel,
+        paymentMethod: 'دفع عند الاستلام COD'
+      });
+    }
+  }
+
+  // Recalculate total online sales
+  onlineSalesTotalFils = realOnlineOrders.reduce((acc, o) => acc + o.totalFils, 0);
+
+  // Calculate Top 4 Financial KPI Cards
+  const cashExpensesList = memoryStoreState.operatingExpenses.filter(e => e.paymentMethod === 'CASH');
+  const cashExpensesTotalFils = cashExpensesList.reduce((acc, e) => acc + e.amountFils, 0) || 55000;
+  const cashSalesTotalFils = dbSalesTotalFils;
+  const deliveryReceivableFils = memoryStoreState.deliverySettlement.remainingFils || 185000;
+
+  // 3. Filter Goods Movements
+  const goodsMovements = memoryStoreState.goodsMovements.filter(m => {
+    if (currentChannel === 'ALL') return true;
+    return m.channel === 'ALL' || m.channel === currentChannel;
+  });
+
+  // 4. Financial Reports & Profit/Loss (P&L) Calculation
+  const totalGrossSalesFils = cashSalesTotalFils + onlineSalesTotalFils;
+  const cogsFils = Math.round(totalGrossSalesFils * 0.65);
+  const grossProfitFils = totalGrossSalesFils - cogsFils;
+  
+  const directOperatingExpensesFils = memoryStoreState.operatingExpenses.reduce((acc, e) => acc + e.amountFils, 0);
+  const deliveryFeesFils = memoryStoreState.deliverySettlement.deliveryFeesDeductibleFils;
+  const totalExpensesFils = directOperatingExpensesFils + deliveryFeesFils;
+  
+  const netOperatingProfitFils = grossProfitFils - totalExpensesFils;
+
+  const cashSalesList: CashSaleRecord[] = realCashSalesList;
+  const onlineOrdersList: OnlineOrderRecord[] = realOnlineOrders;
+
+  // Sync delivery orders with all online orders
+  if (!memoryStoreState.deliveryOrders || memoryStoreState.deliveryOrders.length <= 3) {
+    memoryStoreState.deliveryOrders = [];
+  }
+  for (const ord of GHAZAL_DEMO_ORDERS) {
+    if (!memoryStoreState.deliveryOrders.some(d => d.id === ord.id || d.orderNumber === ord.reference)) {
+      const isDelivered = ord.status === 'DELIVERED';
+      const isCancelled = ord.status === 'CANCELLED';
+      const isShipped = ord.status === 'SHIPPED';
+      const fee = ord.shippingCost || 2000;
+      const cod = isCancelled ? 0 : ord.totalAmount;
+      const net = isCancelled ? 0 : Math.max(0, cod - fee);
+      const city = ord.addressStreet ? ord.addressStreet.split('-')[0].trim() : 'عين الباشا';
+
+      memoryStoreState.deliveryOrders.push({
+        id: ord.id,
+        orderNumber: ord.reference,
+        companyName: 'سريعة اكسبرس',
+        customerName: ord.customerName,
+        city: city || 'عين الباشا',
+        codAmountFils: cod,
+        deliveryFeeFils: fee,
+        netSettlementFils: net,
+        status: isDelivered ? 'DELIVERED_COLLECTED' : isCancelled ? 'RETURNED' : isShipped ? 'IN_TRANSIT' : 'IN_TRANSIT',
+        date: ord.createdAt.split('T')[0]
+      });
+    }
+  }
+  const deliveryOrdersList: DeliveryOrderRecord[] = memoryStoreState.deliveryOrders;
+
+  // 5. Central Invoices List (Fully includes both POS and all Online Store Demo Orders)
+  let centralInvoicesList: any[] = [];
+  try {
+    const dbInvoices = await prisma.invoice.findMany({
+      include: {
+        sale: {
+          include: {
+            employee: { select: { name: true } },
+            items: true
+          }
+        },
+        order: true
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100
+    });
+
+    if (dbInvoices && dbInvoices.length > 0) {
+      centralInvoicesList = dbInvoices.map(inv => ({
+        id: inv.id,
+        number: inv.number,
+        source: inv.saleId ? 'POS' : 'STOREFRONT',
+        customerName: inv.sale?.customerName || inv.order?.customerName || 'عميل نقدي',
+        cashierName: inv.sale?.employee?.name || inv.cashierNameSnapshot || 'كاشير غزل (عين الباشا)',
+        grossTotalFils: inv.grossTotalFils || inv.sale?.total || inv.order?.totalAmount || 0,
+        paymentStatus: inv.paymentStatus || 'PAID',
+        taxSubmissionStatus: inv.taxSubmissionStatus || 'ACCEPTED',
+        printed: inv.printed,
+        date: formatJordanDateTime(inv.createdAt)
+      }));
+    }
+  } catch (err) {
+    console.warn('Prisma invoices lookup in settlements:', err);
+  }
+
+  // Ensure POS cash sales invoices are present
+  for (const s of realCashSalesList) {
+    if (!centralInvoicesList.some(inv => inv.id === `inv-${s.id}` || inv.number === s.receiptNumber)) {
+      centralInvoicesList.push({
+        id: `inv-${s.id}`,
+        number: s.receiptNumber,
+        source: 'POS' as const,
+        customerName: s.customerName || 'زبونة نقدية',
+        cashierName: s.cashierName,
+        grossTotalFils: s.totalFils,
+        paymentStatus: 'PAID',
+        taxSubmissionStatus: 'ACCEPTED',
+        printed: 1,
+        date: s.date
+      });
+    }
+  }
+
+  // Ensure Online Store demo orders invoices are present in central invoices registry
+  for (const ord of GHAZAL_DEMO_ORDERS) {
+    if (!centralInvoicesList.some(inv => inv.id === ord.id || inv.number === ord.reference)) {
+      centralInvoicesList.push({
+        id: ord.id,
+        number: ord.reference,
+        source: 'STOREFRONT' as const,
+        customerName: ord.customerName,
+        cashierName: 'متجر غزل الإلكتروني',
+        grossTotalFils: ord.totalAmount,
+        paymentStatus: ord.status === 'DELIVERED' ? 'PAID' : ord.status === 'CANCELLED' ? 'CANCELLED' : 'PAID',
+        taxSubmissionStatus: 'ACCEPTED',
+        printed: 1,
+        date: formatJordanDateTime(new Date(ord.createdAt))
+      });
+    }
+  }
+
+  // Sort invoices newest first
+  centralInvoicesList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  // 6. Courier Batches Initialization
+  if (!memoryStoreState.courierBatches) {
+    memoryStoreState.courierBatches = [
+      {
+        id: 'batch-001',
+        batchNumber: 'BATCH-2026-001',
+        courierName: 'سريعة اكسبرس',
+        status: 'OUT_FOR_DELIVERY',
+        createdAt: '2026-11-20T10:30:00.000Z',
+        updatedAt: '2026-11-20T11:00:00.000Z',
+        notes: 'شحنة طلبيات المحافظات - جولة الصباح',
+        orders: [
+          {
+            orderId: 'del-1',
+            orderNumber: 'ORD-5479',
+            customerName: 'آية منصور',
+            customerPhone: '0799887766',
+            city: 'الزرقاء',
+            address: 'الزرقاء الجديدة - شارع 36',
+            codAmountFils: 29000,
+            deliveryFeeFils: 3000,
+            netSettlementFils: 26000,
+            status: 'SHIPPED'
+          },
+          {
+            orderId: 'del-2',
+            orderNumber: 'ORD-5480',
+            customerName: 'نور الهدى',
+            customerPhone: '0788776655',
+            city: 'إربد',
+            address: 'إربد - شارع الجامعة',
+            codAmountFils: 45000,
+            deliveryFeeFils: 3500,
+            netSettlementFils: 41500,
+            status: 'SHIPPED'
+          }
+        ],
+        totalCodFils: 74000,
+        totalDeliveryFeeFils: 6500,
+        netSettlementFils: 67500
+      }
+    ];
+  }
+
+  // 7. Collect all orders in PREPARED status waiting for courier batch assignment
+  const preparedOrdersList: CourierBatchOrderSummary[] = [];
+  for (const ord of GHAZAL_DEMO_ORDERS) {
+    if (ord.status === 'PREPARED' || ord.status === 'READY_FOR_DELIVERY') {
+      const cod = ord.totalAmount;
+      const fee = ord.shippingCost || 2000;
+      preparedOrdersList.push({
+        orderId: ord.id,
+        orderNumber: ord.reference,
+        customerName: ord.customerName,
+        customerPhone: ord.customerPhone,
+        city: ord.addressStreet ? ord.addressStreet.split('-')[0].trim() : 'عين الباشا',
+        address: [ord.addressStreet, ord.addressBuilding, ord.addressApartment].filter(Boolean).join('، ') || 'عين الباشا',
+        codAmountFils: cod,
+        deliveryFeeFils: fee,
+        netSettlementFils: Math.max(0, cod - fee),
+        status: ord.status
+      });
+    }
+  }
+
+  try {
+    const dbPrepared = await prisma.order.findMany({
+      where: { status: { in: ['PREPARED', 'READY_FOR_DELIVERY'] } },
+      orderBy: { createdAt: 'desc' }
+    });
+    for (const ord of dbPrepared) {
+      if (!preparedOrdersList.some(p => p.orderId === ord.id || p.orderNumber === ord.reference)) {
+        preparedOrdersList.push({
+          orderId: ord.id,
+          orderNumber: ord.reference,
+          customerName: ord.customerName,
+          customerPhone: ord.customerPhone,
+          city: 'المملكة الأردنية',
+          address: ord.notes || 'العنوان مسجل',
+          codAmountFils: ord.totalAmount,
+          deliveryFeeFils: ord.shippingCost,
+          netSettlementFils: Math.max(0, ord.totalAmount - ord.shippingCost),
+          status: ord.status
+        });
+      }
+    }
+  } catch (e) {}
+
+  return {
+    channelFilter: currentChannel,
+    kpis: {
+      cashSalesTotalFils,
+      onlineSalesTotalFils,
+      deliveryReceivableFils,
+      cashExpensesTotalFils,
+      totalStockCostFils: 2450000,
+      reorderNeededCount: 0,
+      openVariancesFils: 12000
+    },
+    inventory: inventoryList,
+    cashSales: cashSalesList,
+    onlineOrders: onlineOrdersList,
+    deliveryOrders: deliveryOrdersList,
+    preparedOrders: preparedOrdersList,
+    courierBatches: memoryStoreState.courierBatches,
+    courierCompanies: memoryStoreState.courierCompanies || [],
+    cashExpenses: cashExpensesList,
+    invoices: centralInvoicesList,
+    auditSessions: memoryStoreState.auditSessions,
+    goodsMovements,
+    deliverySettlement: memoryStoreState.deliverySettlement,
+    cashDrawerSettlements: memoryStoreState.cashDrawerSettlements,
+    bankSettlements: memoryStoreState.bankSettlements,
+    purchaseInvoices: memoryStoreState.purchaseInvoices,
+    operatingExpenses: memoryStoreState.operatingExpenses,
+    pnlReport: {
+      grossSalesFils: totalGrossSalesFils > 0 ? totalGrossSalesFils : 1000000,
+      cogsFils: cogsFils > 0 ? cogsFils : 650000,
+      grossProfitFils: grossProfitFils > 0 ? grossProfitFils : 350000,
+      operatingExpensesFils: totalExpensesFils > 0 ? totalExpensesFils : 150000,
+      netOperatingProfitFils: netOperatingProfitFils > 0 ? netOperatingProfitFils : 200000,
+      inventoryCostValuationFils: 2450000
+    }
+  };
+}
+
+// ====================================================================
+// SECTION 2: PHYSICAL AUDIT (الجرد الفعلي والعد والفروقات)
+// ====================================================================
+
+export async function startNewAuditSession(channel: StoreChannel = 'ALL', auditorName: string = 'أمين المستودع') {
+  try {
+    const nextSeq = (memoryStoreState.auditSessions.length + 1).toString().padStart(3, '0');
+    const sessionNumber = `AUD-2026-${nextSeq}`;
+
+    // Generate items to count from catalog
+    const sessionItems: AuditSessionItem[] = [];
+    for (const prod of COSMETICS_CATALOG.slice(0, 15)) {
+      for (const v of prod.variants.slice(0, 1)) {
+        const itemState = memoryStoreState.inventory[v.sku] || {
+          physicalStock: v.stock ?? 15,
+          reservedStock: 2,
+          unitCostFils: Math.round(v.price * 0.7),
+          reorderLevel: 4,
+          channel: 'ALL'
+        };
+
+        if (channel !== 'ALL' && itemState.channel !== 'ALL' && itemState.channel !== channel) {
+          continue;
+        }
+
+        sessionItems.push({
+          id: `item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          sku: v.sku,
+          name: prod.nameAr,
+          specification: v.size || v.shade || 'قياسي',
+          channel: itemState.channel,
+          bookStock: itemState.physicalStock,
+          countedStock: undefined,
+          variance: 0,
+          unitCostFils: itemState.unitCostFils,
+          varianceValueFils: 0,
+          status: 'UNCOUNTED',
+          recounted: false
+        });
+      }
+    }
+
+    const newSession: AuditSession = {
+      id: `aud-${Date.now()}`,
+      sessionNumber,
+      channel,
+      status: 'IN_PROGRESS',
+      auditorName,
+      createdAt: new Date().toISOString(),
+      totalItemsCount: sessionItems.length,
+      uncountedCount: sessionItems.length,
+      variancesCount: 0,
+      totalBookValueFils: sessionItems.reduce((acc, it) => acc + (it.bookStock * it.unitCostFils), 0),
+      totalCountedValueFils: 0,
+      netVarianceFils: 0,
+      items: sessionItems
+    };
+
+    memoryStoreState.auditSessions.unshift(newSession);
+    revalidatePath('/admin/settlements');
+    return { success: true, session: newSession };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل فتح جلسة جرد جديدة' };
+  }
+}
+
+export async function recordAuditItemCount(data: {
+  sessionId: string;
+  itemId: string;
+  countedStock: number;
+  reason?: string;
+  recounted?: boolean;
+}) {
+  try {
+    const session = memoryStoreState.auditSessions.find(s => s.id === data.sessionId);
+    if (!session) return { success: false, error: 'جلسة الجرد غير موجودة' };
+    if (session.status === 'COMPLETED') return { success: false, error: 'الجلسة معتمدة ومغلقة ولا يمكن تعديلها' };
+
+    const item = session.items.find(i => i.id === data.itemId);
+    if (!item) return { success: false, error: 'الصنف غير موجود بالجلسة' };
+
+    item.countedStock = data.countedStock;
+    item.variance = item.countedStock - item.bookStock;
+    item.varianceValueFils = item.variance * item.unitCostFils;
+    item.reason = data.reason || (item.variance === 0 ? 'مطابق تماماً' : item.reason || '');
+    item.recounted = !!data.recounted;
+
+    if (item.variance === 0) {
+      item.status = 'MATCH';
+    } else if (item.variance < 0) {
+      item.status = 'SHORTAGE';
+    } else {
+      item.status = 'SURPLUS';
+    }
+
+    // Recompute session totals
+    const uncounted = session.items.filter(i => i.status === 'UNCOUNTED').length;
+    const variances = session.items.filter(i => i.variance !== 0 && i.status !== 'UNCOUNTED').length;
+    session.uncountedCount = uncounted;
+    session.variancesCount = variances;
+    session.netVarianceFils = session.items.reduce((acc, it) => acc + it.varianceValueFils, 0);
+
+    if (variances > 0) {
+      session.status = 'NEEDS_REVIEW';
+    } else if (uncounted === 0) {
+      session.status = 'PENDING_APPROVAL';
+    } else {
+      session.status = 'IN_PROGRESS';
+    }
+
+    revalidatePath('/admin/settlements');
+    return { success: true, item, sessionStatus: session.status };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل تسجيل كمية الجرد' };
+  }
+}
+
+export async function requestAuditApproval(sessionId: string) {
+  try {
+    const session = memoryStoreState.auditSessions.find(s => s.id === sessionId);
+    if (!session) return { success: false, error: 'جلسة الجرد غير موجودة' };
+    session.status = 'PENDING_APPROVAL';
+    revalidatePath('/admin/settlements');
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function approveAndCommitAuditSession(sessionId: string, approverName: string = 'المدير العام') {
+  try {
+    const session = memoryStoreState.auditSessions.find(s => s.id === sessionId);
+    if (!session) return { success: false, error: 'جلسة الجرد غير موجودة' };
+    if (session.status === 'COMPLETED') return { success: false, error: 'هذه الجلسة تم اعتمادها مسبقاً' };
+
+    // Apply adjustments to inventory and record in goodsMovements and DB AuditLog
+    for (const item of session.items) {
+      if (item.countedStock !== undefined && item.variance !== 0) {
+        // 1. Update in-memory physical stock
+        if (memoryStoreState.inventory[item.sku]) {
+          const oldStock = memoryStoreState.inventory[item.sku].physicalStock;
+          memoryStoreState.inventory[item.sku].physicalStock = item.countedStock;
+
+          // 2. Add Goods Movement
+          memoryStoreState.goodsMovements.unshift({
+            id: `mov-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            sku: item.sku,
+            productName: item.name,
+            specification: item.specification,
+            channel: item.channel,
+            type: 'AUDIT_ADJUSTMENT',
+            reference: session.sessionNumber,
+            qtyBefore: oldStock,
+            qtyChange: item.variance,
+            qtyAfter: item.countedStock,
+            employeeName: `${approverName} (اعتماد جرد)`,
+            createdAt: new Date().toISOString(),
+            notes: item.reason || `تسوية جرد دوري معتمد بموجب ${session.sessionNumber}`
+          });
+        }
+
+        // 3. Try logging to DB AuditLog and StockAdjustment
+        try {
+          await prisma.stockAdjustment.create({
+            data: {
+              sku: item.sku,
+              oldStock: item.bookStock,
+              newStock: item.countedStock,
+              reason: `${session.sessionNumber}: ${item.reason || 'تسوية جرد'}`
+            }
+          });
+          await prisma.auditLog.create({
+            data: {
+              action: 'INVENTORY_AUDIT_ADJUSTMENT',
+              entityType: 'ProductVariant',
+              entityId: item.sku,
+              details: JSON.stringify({
+                sessionNumber: session.sessionNumber,
+                variance: item.variance,
+                costVarianceFils: item.varianceValueFils,
+                reason: item.reason,
+                approvedBy: approverName
+              })
+            }
+          });
+        } catch {}
+      }
+    }
+
+    session.status = 'COMPLETED';
+    session.approverName = approverName;
+    session.approvedAt = new Date().toISOString();
+
+    revalidatePath('/admin/settlements');
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل اعتماد جلسة الجرد' };
+  }
+}
+
+// ====================================================================
+// SECTION 4: FINANCIAL SETTLEMENTS (التسويات المالية)
+// ====================================================================
+
+export async function recordDeliveryRemittancePayment(data: {
+  amountFils: number;
+  receiptRef: string;
+  notes?: string;
+}) {
+  try {
+    const ds = memoryStoreState.deliverySettlement;
+    const newRemittance = {
+      id: `rem-${Date.now()}`,
+      receiptRef: data.receiptRef,
+      amountFils: data.amountFils,
+      date: new Date().toISOString().split('T')[0],
+      notes: data.notes || 'تسجيل توريد نقدي/بنكي من شركة التوصيل',
+      status: 'CONFIRMED' as const
+    };
+
+    ds.remittances.unshift(newRemittance);
+    ds.remittedFils += data.amountFils;
+    ds.remainingFils = Math.max(0, ds.netSettlementExpectedFils - ds.remittedFils);
+
+    revalidatePath('/admin/settlements');
+    return { success: true, remittance: newRemittance };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل تسجيل توريد شركة التوصيل' };
+  }
+}
+
+export async function settleSingleDeliveryOrderAction(orderId: string, notes?: string) {
+  try {
+    if (!memoryStoreState.deliveryOrders) {
+      memoryStoreState.deliveryOrders = [
+        { id: 'del-1', orderNumber: 'ORD-5479', companyName: 'سريعة اكسبرس', customerName: 'آية منصور', city: 'الزرقاء', codAmountFils: 29000, deliveryFeeFils: 3000, netSettlementFils: 26000, status: 'DELIVERED_COLLECTED', date: '2026-11-19' },
+        { id: 'del-2', orderNumber: 'ORD-5480', companyName: 'سريعة اكسبرس', customerName: 'نور الهدى', city: 'إربد', codAmountFils: 45000, deliveryFeeFils: 3500, netSettlementFils: 41500, status: 'IN_TRANSIT', date: '2026-11-20' },
+        { id: 'del-3', orderNumber: 'ORD-5475', companyName: 'سريعة اكسبرس', customerName: 'فاطمة الكردي', city: 'عمّان', codAmountFils: 60000, deliveryFeeFils: 2500, netSettlementFils: 57500, status: 'DELIVERED_COLLECTED', date: '2026-11-18' }
+      ];
+    }
+    const target = memoryStoreState.deliveryOrders.find(d => d.id === orderId || d.orderNumber === orderId);
+    if (!target) {
+      return { success: false, error: 'الطلبية غير موجودة في سجل التوصيل' };
+    }
+
+    if (target.status !== 'DELIVERED_COLLECTED') {
+      return {
+        success: false,
+        error: 'لا يمكن إجراء التسوية المالية إلا للطلبيات التي تم الانتهاء منها وتوصيلها بالكامل للزبون واستلام ثمنها (تم التحصيل / التسليم ✓).'
+      };
+    }
+
+    target.status = 'SETTLED';
+    target.settledAt = new Date().toISOString();
+    target.settledBy = 'مدير النظام (غزل)';
+
+    // Add individual remittance record
+    const ds = memoryStoreState.deliverySettlement;
+    const newRemittance = {
+      id: `rem-order-${target.id}-${Date.now()}`,
+      receiptRef: `تسوية-${target.orderNumber}`,
+      amountFils: target.netSettlementFils,
+      date: new Date().toISOString().split('T')[0],
+      notes: notes || `تسوية طلبية التوصيل ${target.orderNumber} (${target.customerName} - ${target.city})`,
+      status: 'CONFIRMED' as const
+    };
+
+    ds.remittances.unshift(newRemittance);
+    ds.remittedFils += target.netSettlementFils;
+    ds.remainingFils = Math.max(0, ds.netSettlementExpectedFils - ds.remittedFils);
+
+    revalidatePath('/admin/settlements');
+    return { success: true, order: target, remittance: newRemittance };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل تسوية الطلبية' };
+  }
+}
+
+export async function reconcileCashDrawerSession(data: {
+  countedFils: number;
+  cashierName: string;
+  notes?: string;
+  shiftName?: string;
+}) {
+  try {
+    const expected = 150000; // 150.000 JOD standard drawer expectation
+    const variance = data.countedFils - expected;
+
+    const newEntry: CashDrawerSettlement = {
+      id: `csh-${Date.now()}`,
+      date: new Date().toISOString().split('T')[0],
+      shiftName: data.shiftName || 'الوردية الحالية (الكاشير)',
+      cashierName: data.cashierName,
+      expectedCashFils: expected,
+      countedCashFils: data.countedFils,
+      varianceFils: variance,
+      status: variance === 0 ? 'APPROVED' : 'VARIANCE_PENDING',
+      notes: data.notes || (variance === 0 ? 'مطابقة ممتازة بدون فروقات' : `فرق نقدي بقيمة ${(variance / 1000).toFixed(3)} د.أ`),
+      approvedBy: 'مدير الصالة'
+    };
+
+    memoryStoreState.cashDrawerSettlements.unshift(newEntry);
+    revalidatePath('/admin/settlements');
+    return { success: true, settlement: newEntry };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل تسجيل مطابقة صندوق الكاشير' };
+  }
+}
+
+// ====================================================================
+// SECTION 5: PURCHASES & EXPENSES (المشتريات والمصاريف)
+// ====================================================================
+
+export async function recordNewPurchaseInvoice(data: {
+  supplierName: string;
+  supplierPhone?: string;
+  invoiceNumber: string;
+  paymentStatus: 'PAID' | 'CREDIT' | 'PARTIAL';
+  paidAmountFils: number;
+  items: Array<{ sku: string; name: string; quantity: number; unitCostFils: number }>;
+  notes?: string;
+}) {
+  try {
+    const totalCostFils = data.items.reduce((acc, it) => acc + (it.quantity * it.unitCostFils), 0);
+    const remainingAmountFils = Math.max(0, totalCostFils - data.paidAmountFils);
+
+    const newInvoice: PurchaseInvoice = {
+      id: `po-${Date.now()}`,
+      invoiceNumber: data.invoiceNumber,
+      supplierName: data.supplierName,
+      supplierPhone: data.supplierPhone,
+      items: data.items.map(it => ({
+        ...it,
+        totalFils: it.quantity * it.unitCostFils
+      })),
+      totalCostFils,
+      paymentStatus: data.paymentStatus,
+      deliveryStatus: 'RECEIVED',
+      paidAmountFils: data.paidAmountFils,
+      remainingAmountFils,
+      createdAt: new Date().toISOString(),
+      notes: data.notes
+    };
+
+    // Increase stock for each purchased item and record movement
+    for (const item of data.items) {
+      if (!memoryStoreState.inventory[item.sku]) {
+        memoryStoreState.inventory[item.sku] = {
+          physicalStock: 0,
+          reservedStock: 0,
+          unitCostFils: item.unitCostFils,
+          reorderLevel: 4,
+          channel: 'ALL'
+        };
+      }
+
+      const before = memoryStoreState.inventory[item.sku].physicalStock;
+      memoryStoreState.inventory[item.sku].physicalStock += item.quantity;
+      memoryStoreState.inventory[item.sku].unitCostFils = item.unitCostFils; // Update unit cost
+
+      memoryStoreState.goodsMovements.unshift({
+        id: `mov-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        sku: item.sku,
+        productName: item.name,
+        specification: 'استلام مشتريات',
+        channel: 'ALL',
+        type: 'PURCHASE_RECEIPT',
+        reference: data.invoiceNumber,
+        qtyBefore: before,
+        qtyChange: item.quantity,
+        qtyAfter: before + item.quantity,
+        employeeName: 'أمين المستودع',
+        createdAt: new Date().toISOString(),
+        notes: `توريد من المورد: ${data.supplierName}`
+      });
+    }
+
+    memoryStoreState.purchaseInvoices.unshift(newInvoice);
+    revalidatePath('/admin/settlements');
+    return { success: true, invoice: newInvoice };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل تسجيل فاتورة الشراء' };
+  }
+}
+
+export const addOperatingExpenseAction = recordNewOperatingExpense;
+
+export async function recordNewOperatingExpense(data: {
+  category: 'إيجار المحل' | 'فواتير الكهرباء' | 'فواتير المياه والإنترنت' | 'إعلانات وتسويق' | 'إيجار المعرض' | 'رواتب ومكافآت' | 'تغليف ومستلزمات' | 'استضافة وبرمجيات' | 'صيانة ومصاريف عامة' | string;
+  amountFils: number;
+  beneficiary: string;
+  paymentMethod: 'CASH' | 'BANK';
+  notes?: string;
+  recordedBy?: string;
+}) {
+  try {
+    const nextSeq = (memoryStoreState.operatingExpenses.length + 101).toString();
+    const newExpense: OperatingExpense = {
+      id: `exp-${Date.now()}`,
+      expenseNumber: `EXP-${nextSeq}`,
+      category: data.category,
+      amountFils: data.amountFils,
+      beneficiary: data.beneficiary,
+      paymentMethod: data.paymentMethod,
+      paymentStatus: 'PAID',
+      date: new Date().toISOString().split('T')[0],
+      recordedBy: data.recordedBy || 'المسؤول المالي',
+      notes: data.notes
+    };
+
+    memoryStoreState.operatingExpenses.unshift(newExpense);
+    revalidatePath('/admin/settlements');
+    return { success: true, expense: newExpense };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل تسجيل المصروف التشغيلي' };
+  }
+}
+
+export async function deleteOperatingExpenseAction(expenseId: string) {
+  try {
+    if (!memoryStoreState.operatingExpenses) {
+      return { success: false, error: 'سجل المصروفات غير متوفر' };
+    }
+    memoryStoreState.operatingExpenses = memoryStoreState.operatingExpenses.filter(e => e.id !== expenseId);
+    revalidatePath('/admin/settlements');
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'فشل حذف المصروف التشغيلي' };
+  }
+}
+
+/**
+ * Toggle Product Visibility (إخفاء / إظهار المنتج مباشرة إذا انتهى)
+ */
+export async function toggleProductVisibilityAction(productId: string, isVisible: boolean) {
+  try {
+    const hiddenSet: Set<string> = (globalThis as any).__ghazal_hidden_products || new Set<string>();
+    if (!isVisible) {
+      hiddenSet.add(productId);
+    } else {
+      hiddenSet.delete(productId);
+    }
+    (globalThis as any).__ghazal_hidden_products = hiddenSet;
+
+    try {
+      await prisma.product.update({
+        where: { id: productId },
+        data: { isVisible }
+      });
+    } catch {}
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/products');
+    revalidatePath('/pos/cashier');
+    return { success: true, isVisible };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل تحديث حالة المنتج' };
+  }
+}
+
+/**
+ * Record Cash Drawer Expense / Withdrawal from POS Cashier
+ */
+export async function recordCashierDrawerExpense(data: {
+  amountFils: number;
+  reason: string;
+  cashierName?: string;
+  beneficiary?: string;
+}) {
+  try {
+    const expenseNum = `CSH-EXP-${Date.now().toString().slice(-4)}`;
+    const newExp: OperatingExpense = {
+      id: `exp-${Date.now()}`,
+      expenseNumber: expenseNum,
+      category: 'صيانة ومصاريف عامة',
+      amountFils: data.amountFils,
+      beneficiary: data.beneficiary || 'كاشير الفرع',
+      paymentMethod: 'CASH',
+      paymentStatus: 'PAID',
+      date: new Date().toISOString().split('T')[0],
+      recordedBy: data.cashierName || 'كاشير المعرض',
+      notes: data.reason
+    };
+
+    memoryStoreState.operatingExpenses.unshift(newExp);
+    
+    // Also record in cashDrawerSettlements
+    if (memoryStoreState.cashDrawerSettlements.length > 0) {
+      memoryStoreState.cashDrawerSettlements[0].countedCashFils = Math.max(
+        0, 
+        memoryStoreState.cashDrawerSettlements[0].countedCashFils - data.amountFils
+      );
+    }
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/pos/cashier');
+    return { success: true, expense: newExp };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'فشل تسجيل المصروف' };
+  }
+}
+
+// ====================================================================
+// REAL-TIME INVENTORY MOVEMENT SYNCHRONIZATION FROM POS
+// ====================================================================
+
+export async function recordPOSSaleGoodsMovements(
+  saleReference: string,
+  items: Array<{ name: string; sku?: string; quantity: number }>,
+  cashierName: string
+) {
+  try {
+    for (const item of items) {
+      const sku = item.sku || 'GENERAL';
+      const existingInv = memoryStoreState.inventory[sku];
+      const qtyBefore = existingInv ? existingInv.physicalStock : 20;
+      const qtyChange = -item.quantity;
+      const qtyAfter = Math.max(0, qtyBefore + qtyChange);
+
+      if (existingInv) {
+        existingInv.physicalStock = qtyAfter;
+      }
+
+      memoryStoreState.goodsMovements.unshift({
+        id: `mov-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        sku,
+        productName: item.name,
+        specification: 'صالة المعرض',
+        channel: 'POS',
+        type: 'ORDER_DISPATCH',
+        reference: saleReference,
+        qtyBefore,
+        qtyChange,
+        qtyAfter,
+        employeeName: cashierName,
+        createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
+        notes: `مبيعات كاشير مباشرة بموجب إيصال رقم ${saleReference}`
+      });
+    }
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/reports');
+    revalidatePath('/admin/dashboard');
+  } catch (e) {
+    console.warn('Error recording POS sale goods movement:', e);
+  }
+}
+
+// ====================================================================
+// SECTION 7: COURIER BATCHES & SHIPMENTS (طلبيات شركة التوصيل المجمعة)
+// ====================================================================
+
+export async function createCourierBatchAction(data: {
+  batchNumber: string;
+  courierName: string;
+  orderIds: string[];
+  notes?: string;
+}) {
+  try {
+    const { batchNumber, courierName, orderIds, notes } = data;
+    if (!batchNumber || !batchNumber.trim()) {
+      return { success: false, error: 'يرجى إدخال رقم الطلبية / الشحنة' };
+    }
+    if (!courierName || !courierName.trim()) {
+      return { success: false, error: 'يرجى إدخال أو تحديد شركة التوصيل / المندوب' };
+    }
+    if (!orderIds || orderIds.length === 0) {
+      return { success: false, error: 'يرجى تحديد طلب واحد على الأقل لإدراجه في الطلبية' };
+    }
+
+    if (!memoryStoreState.courierBatches) {
+      memoryStoreState.courierBatches = [];
+    }
+
+    // Check if batch number already exists
+    const cleanNum = batchNumber.trim();
+    if (memoryStoreState.courierBatches.some(b => b.batchNumber.toLowerCase() === cleanNum.toLowerCase())) {
+      return { success: false, error: `رقم الطلبية (${cleanNum}) مسجل مسبقاً، يرجى اختيار رقم آخر` };
+    }
+
+    const batchOrders: CourierBatchOrderSummary[] = [];
+    let totalCodFils = 0;
+    let totalDeliveryFeeFils = 0;
+
+    for (const orderId of orderIds) {
+      // Find order in demo orders or DB
+      const demo = getDemoOrderById(orderId);
+      if (demo) {
+        const cod = demo.totalAmount;
+        const fee = demo.shippingCost || 2000;
+        const net = Math.max(0, cod - fee);
+        totalCodFils += cod;
+        totalDeliveryFeeFils += fee;
+
+        batchOrders.push({
+          orderId: demo.id,
+          orderNumber: demo.reference,
+          customerName: demo.customerName,
+          customerPhone: demo.customerPhone,
+          city: demo.addressStreet ? demo.addressStreet.split('-')[0].trim() : 'عين الباشا',
+          address: [demo.addressStreet, demo.addressBuilding, demo.addressApartment].filter(Boolean).join('، '),
+          codAmountFils: cod,
+          deliveryFeeFils: fee,
+          netSettlementFils: net,
+          status: 'SHIPPED'
+        });
+
+        // Update order status to SHIPPED immediately upon batch creation
+        demo.status = 'SHIPPED';
+        demo.statusHistory.unshift({
+          id: `hist-batch-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          orderId: demo.id,
+          status: 'SHIPPED',
+          notes: `تم تسليم الطلب ضمن طلبية الشحن #${cleanNum} لشركة التوصيل (${courierName})`,
+          createdAt: new Date().toISOString()
+        });
+
+        // Also add to deliveryOrders in settlements so it is tracked
+        if (!memoryStoreState.deliveryOrders) memoryStoreState.deliveryOrders = [];
+        if (!memoryStoreState.deliveryOrders.some(d => d.orderNumber === demo.reference)) {
+          memoryStoreState.deliveryOrders.unshift({
+            id: `del-${demo.id}`,
+            orderNumber: demo.reference,
+            companyName: courierName,
+            customerName: demo.customerName,
+            city: demo.addressStreet ? demo.addressStreet.split('-')[0].trim() : 'عين الباشا',
+            codAmountFils: cod,
+            deliveryFeeFils: fee,
+            netSettlementFils: net,
+            status: 'IN_TRANSIT',
+            date: new Date().toISOString().split('T')[0]
+          });
+        }
+      }
+
+      // Also try updating Prisma DB if reachable
+      try {
+        await prisma.order.update({
+          where: { id: orderId },
+          data: {
+            status: 'SHIPPED',
+            notes: notes ? `ضمن طلبية الشحن #${cleanNum} (${courierName}) | ${notes}` : `ضمن طلبية الشحن #${cleanNum} (${courierName})`
+          }
+        });
+        await prisma.orderStatusHistory.create({
+          data: {
+            orderId,
+            status: 'SHIPPED',
+            notes: `تم تسليم الطلب لشركة التوصيل ${courierName} ضمن طلبية الشحن #${cleanNum}`
+          }
+        });
+      } catch (e) {}
+    }
+
+    const newBatch: CourierBatchRecord = {
+      id: `batch-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      batchNumber: cleanNum,
+      courierName: courierName.trim(),
+      status: 'OUT_FOR_DELIVERY',
+      orders: batchOrders,
+      totalCodFils,
+      totalDeliveryFeeFils,
+      netSettlementFils: totalCodFils - totalDeliveryFeeFils,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      notes: notes || ''
+    };
+
+    memoryStoreState.courierBatches.unshift(newBatch);
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/deliveries');
+    return { success: true, batch: newBatch };
+  } catch (error: any) {
+    console.error('createCourierBatchAction error:', error);
+    return { success: false, error: error.message || 'حدث خطأ أثناء إنشاء طلبية التوصيل' };
+  }
+}
+
+export async function updateCourierBatchStatusAction(data: {
+  batchId: string;
+  newStatus: 'PREPARED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'SETTLED' | 'CANCELLED';
+  storeBearsDeliveryCost?: boolean;
+}) {
+  try {
+    const { batchId, newStatus, storeBearsDeliveryCost = false } = data;
+    if (!memoryStoreState.courierBatches) {
+      return { success: false, error: 'سجل طلبيات الشحن غير موجود' };
+    }
+
+    const batch = memoryStoreState.courierBatches.find(b => b.id === batchId || b.batchNumber === batchId);
+    if (!batch) {
+      return { success: false, error: 'طلبية التوصيل غير موجودة' };
+    }
+
+    // CRITICAL RULES FOR STATUS TRANSITIONS:
+    // 1. Once SETTLED or CANCELLED, it can never be changed!
+    if (batch.status === 'SETTLED' || batch.status === 'CANCELLED') {
+      return {
+        success: false,
+        error: `لا يمكن تعديل حالة هذه الطلبية إطلاقاً لأنها بحالة نهائية مقفلة (${batch.status === 'CANCELLED' ? 'ملغاة نهائياً' : 'تمت التسوية وتوريد الكاش نهائياً'}).`
+      };
+    }
+
+    // 2. Settlement (SETTLED) is strictly restricted to fully delivered batches!
+    if (newStatus === 'SETTLED' && batch.status !== 'DELIVERED') {
+      return {
+        success: false,
+        error: 'لا يمكن إجراء التسوية المالية للشحنة إلا للطلبيات التي تم الانتهاء منها وتوصيلها بالكامل للزبائن أولاً (تم تسليم الطلبات ✓).'
+      };
+    }
+
+    // 3. Once DELIVERED, the only permitted transition is to SETTLED!
+    if (batch.status === 'DELIVERED' && newStatus !== 'SETTLED') {
+      return {
+        success: false,
+        error: 'هذه الطلبية تم تسليمها بالكامل للزبائن، الإجراء الوحيد المسموح به بعد اكتمال التوصيل هو إجراء التسوية وتوريد الكاش (SETTLED).'
+      };
+    }
+
+    batch.status = newStatus;
+    batch.updatedAt = new Date().toISOString();
+
+    // Map batch status to individual order status
+    let targetOrderStatus = 'SHIPPED';
+    let targetDeliveryRecordStatus: 'IN_TRANSIT' | 'DELIVERED_COLLECTED' | 'SETTLED' | 'RETURNED' = 'IN_TRANSIT';
+    let statusLabelArabic = '';
+
+    switch (newStatus) {
+      case 'PREPARED':
+        targetOrderStatus = 'PREPARED';
+        targetDeliveryRecordStatus = 'IN_TRANSIT';
+        statusLabelArabic = 'جاهز للتسليم لشركة التوصيل';
+        break;
+      case 'OUT_FOR_DELIVERY':
+        targetOrderStatus = 'SHIPPED';
+        targetDeliveryRecordStatus = 'IN_TRANSIT';
+        statusLabelArabic = 'خرج للتوصيل مع المندوب';
+        break;
+      case 'DELIVERED':
+        targetOrderStatus = 'DELIVERED';
+        targetDeliveryRecordStatus = 'DELIVERED_COLLECTED';
+        statusLabelArabic = 'تم تسليم الطلب للزبونة بنجاح وتحصيل الـ COD';
+        break;
+      case 'SETTLED':
+        targetOrderStatus = 'DELIVERED';
+        targetDeliveryRecordStatus = 'SETTLED';
+        statusLabelArabic = 'تمت تسوية وتوريد الحساب بالكامل لحساب المعرض';
+        break;
+      case 'CANCELLED':
+        targetOrderStatus = 'CANCELLED';
+        targetDeliveryRecordStatus = 'RETURNED';
+        statusLabelArabic = storeBearsDeliveryCost
+          ? 'ملغي مع تحمل المتجر لتكلفة التوصيل لشركة الشحن'
+          : 'ملغي بدون أي تكلفة توصيل على المتجر (إعفاء كامل)';
+        
+        batch.totalCodFils = 0;
+        if (!storeBearsDeliveryCost) {
+          batch.totalDeliveryFeeFils = 0;
+          batch.netSettlementFils = 0;
+          for (const bo of batch.orders) {
+            bo.deliveryFeeFils = 0;
+            bo.codAmountFils = 0;
+          }
+        } else {
+          batch.netSettlementFils = -batch.totalDeliveryFeeFils;
+          for (const bo of batch.orders) {
+            bo.codAmountFils = 0;
+          }
+        }
+        break;
+    }
+
+    // Cascade update to EVERY order in this batch (تغيير حالة جميع الطلبات التابعة للطلبية)
+    for (const batchOrder of batch.orders) {
+      batchOrder.status = targetOrderStatus;
+
+      // 1. Update in GHAZAL_DEMO_ORDERS
+      const demo = getDemoOrderById(batchOrder.orderId) || getDemoOrderById(batchOrder.orderNumber);
+      if (demo) {
+        demo.status = targetOrderStatus;
+        demo.updatedAt = new Date().toISOString();
+        demo.statusHistory.unshift({
+          id: `hist-batch-update-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          orderId: demo.id,
+          status: targetOrderStatus,
+          notes: `[تحديث آلي عبر طلبية الشحن #${batch.batchNumber}] تم تغيير الحالة إلى: ${statusLabelArabic}`,
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      // 2. Update in DB if available
+      try {
+        await prisma.order.update({
+          where: { id: batchOrder.orderId },
+          data: {
+            status: targetOrderStatus,
+            ...(newStatus === 'SETTLED' ? { paymentStatus: 'PAID' } : {})
+          }
+        });
+        await prisma.orderStatusHistory.create({
+          data: {
+            orderId: batchOrder.orderId,
+            status: targetOrderStatus,
+            notes: `[تحديث آلي عبر طلبية الشحن #${batch.batchNumber}] ${statusLabelArabic}`
+          }
+        });
+      } catch (e) {}
+
+      // 3. Update in memoryStoreState.deliveryOrders
+      if (memoryStoreState.deliveryOrders) {
+        const delRec = memoryStoreState.deliveryOrders.find(
+          d => d.orderNumber === batchOrder.orderNumber || d.id === batchOrder.orderId
+        );
+        if (delRec) {
+          delRec.status = targetDeliveryRecordStatus;
+          if (newStatus === 'SETTLED') {
+            delRec.settledAt = new Date().toISOString();
+            delRec.settledBy = 'مدير النظام (تسوية مجمعة)';
+          }
+        }
+      }
+    }
+
+    // If settled, update the overall deliverySettlement statement as well
+    if (newStatus === 'SETTLED') {
+      const ds = memoryStoreState.deliverySettlement;
+      const alreadyRemitted = ds.remittances.some(r => r.receiptRef === `تسوية-طلبية-${batch.batchNumber}`);
+      if (!alreadyRemitted) {
+        ds.remittances.unshift({
+          id: `rem-batch-${batch.id}-${Date.now()}`,
+          receiptRef: `تسوية-طلبية-${batch.batchNumber}`,
+          amountFils: batch.netSettlementFils,
+          date: new Date().toISOString().split('T')[0],
+          notes: `تسوية كاملة لطلبية الشحن المجمعة #${batch.batchNumber} (${batch.courierName}) تشمل ${batch.orders.length} طلبات`,
+          status: 'CONFIRMED'
+        });
+        ds.remittedFils += batch.netSettlementFils;
+        ds.remainingFils = Math.max(0, ds.netSettlementExpectedFils - ds.remittedFils);
+      }
+    }
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/deliveries');
+    return {
+      success: true,
+      message: `تم تحديث حالة طلبية الشحن #${batch.batchNumber} بنجاح، وتحديث حالة جميع الطلبات (${batch.orders.length}) المشمولة بها.`
+    };
+  } catch (error: any) {
+    console.error('updateCourierBatchStatusAction error:', error);
+    return { success: false, error: error.message || 'حدث خطأ أثناء تحديث حالة طلبية التوصيل' };
+  }
+}
+
+export async function cancelOrderInCourierBatchAction(data: {
+  batchId: string;
+  orderId: string;
+  storeBearsDeliveryCost: boolean;
+  reason?: string;
+}) {
+  try {
+    const { batchId, orderId, storeBearsDeliveryCost, reason } = data;
+    if (!memoryStoreState.courierBatches) {
+      return { success: false, error: 'سجل طلبيات الشحن غير موجود' };
+    }
+
+    const batch = memoryStoreState.courierBatches.find(b => b.id === batchId || b.batchNumber === batchId);
+    if (!batch) {
+      return { success: false, error: 'طلبية التوصيل غير موجودة' };
+    }
+
+    // Lock check: once delivered or cancelled, batch cannot be modified
+    if (batch.status === 'DELIVERED' || batch.status === 'SETTLED' || batch.status === 'CANCELLED') {
+      return {
+        success: false,
+        error: `لا يمكن تعديل أو إلغاء طلب من هذه الطلبية لأن حالة الإرسالية مقفلة نهائياً (${batch.status === 'CANCELLED' ? 'ملغاة' : 'تم التوصيل بالكامل'}).`
+      };
+    }
+
+    const orderIndex = batch.orders.findIndex(o => o.orderId === orderId || o.orderNumber === orderId);
+    if (orderIndex === -1) {
+      return { success: false, error: 'الطلب المحدد غير موجود داخل هذه الطلبية' };
+    }
+
+    const batchOrder = batch.orders[orderIndex];
+    if (batchOrder.status === 'CANCELLED') {
+      return { success: false, error: 'هذا الطلب ملغي مسبقاً' };
+    }
+
+    // Update order status and financials
+    batchOrder.status = 'CANCELLED';
+    batchOrder.codAmountFils = 0; // Customer is not charged COD
+
+    if (!storeBearsDeliveryCost) {
+      batchOrder.deliveryFeeFils = 0; // Store does not pay delivery fee
+    }
+
+    // Recalculate batch totals
+    batch.totalCodFils = batch.orders
+      .filter(o => o.status !== 'CANCELLED')
+      .reduce((sum, o) => sum + o.codAmountFils, 0);
+
+    batch.totalDeliveryFeeFils = batch.orders
+      .reduce((sum, o) => sum + o.deliveryFeeFils, 0);
+
+    batch.netSettlementFils = batch.totalCodFils - batch.totalDeliveryFeeFils;
+    batch.updatedAt = new Date().toISOString();
+
+    const note = `[إلغاء طلب من إرسالية #${batch.batchNumber}] ${storeBearsDeliveryCost ? 'المتجر يتحمل تكلفة التوصيل لشركة الشحن' : 'المتجر لا يتحمل أي تكلفة توصيل (إعفاء)'}${reason ? ` — ملاحظة: ${reason}` : ''}`;
+
+    // 1. Update in GHAZAL_DEMO_ORDERS
+    const demo = getDemoOrderById(batchOrder.orderId) || getDemoOrderById(batchOrder.orderNumber);
+    if (demo) {
+      demo.status = 'CANCELLED';
+      demo.updatedAt = new Date().toISOString();
+      demo.statusHistory.unshift({
+        id: `hist-order-cancel-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+        orderId: demo.id,
+        status: 'CANCELLED',
+        notes: note,
+        createdAt: new Date().toISOString()
+      });
+    }
+
+    // 2. Update DB
+    try {
+      await prisma.order.update({
+        where: { id: batchOrder.orderId },
+        data: { status: 'CANCELLED' }
+      });
+      await prisma.orderStatusHistory.create({
+        data: {
+          orderId: batchOrder.orderId,
+          status: 'CANCELLED',
+          notes: note
+        }
+      });
+    } catch (e) {}
+
+    // 3. Update deliveryOrders
+    if (memoryStoreState.deliveryOrders) {
+      const delRec = memoryStoreState.deliveryOrders.find(
+        d => d.orderNumber === batchOrder.orderNumber || d.id === batchOrder.orderId
+      );
+      if (delRec) {
+        delRec.status = 'RETURNED';
+      }
+    }
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/deliveries');
+
+    return {
+      success: true,
+      batch,
+      message: `تم إلغاء الطلب #${batchOrder.orderNumber} بنجاح (${storeBearsDeliveryCost ? 'المتجر يتحمل تكلفة التوصيل' : 'المتجر لا يتحمل أي تكلفة توصيل'}).`
+    };
+  } catch (error: any) {
+    console.error('cancelOrderInCourierBatchAction error:', error);
+    return { success: false, error: error.message || 'حدث خطأ أثناء إلغاء الطلب من الطلبية' };
+  }
+}
+
+/**
+ * إلغاء بعض الطلبات من إرسالية التوصيل مع تحديد تحمّل تكلفة التوصيل لكل طلب على حدة
+ */
+export async function cancelMultipleOrdersInCourierBatchAction(data: {
+  batchId: string;
+  cancelledOrders: Array<{
+    orderId: string;
+    storeBearsDeliveryCost: boolean;
+    reason?: string;
+  }>;
+}) {
+  try {
+    const { batchId, cancelledOrders } = data;
+    if (!memoryStoreState.courierBatches) {
+      return { success: false, error: 'سجل طلبيات الشحن غير موجود' };
+    }
+
+    const batch = memoryStoreState.courierBatches.find(b => b.id === batchId || b.batchNumber === batchId);
+    if (!batch) {
+      return { success: false, error: 'طلبية التوصيل غير موجودة' };
+    }
+
+    if (batch.status === 'DELIVERED' || batch.status === 'SETTLED' || batch.status === 'CANCELLED') {
+      return {
+        success: false,
+        error: `لا يمكن تعديل أو إلغاء طلبات من هذه الطلبية لأن حالة الإرسالية مقفلة نهائياً (${batch.status === 'CANCELLED' ? 'ملغاة' : 'تم التوصيل بالكامل'}).`
+      };
+    }
+
+    if (!cancelledOrders || cancelledOrders.length === 0) {
+      return { success: false, error: 'يرجى تحديد طلب واحد على الأقل للإلغاء' };
+    }
+
+    let cancelledCount = 0;
+
+    for (const item of cancelledOrders) {
+      const orderIndex = batch.orders.findIndex(o => o.orderId === item.orderId || o.orderNumber === item.orderId);
+      if (orderIndex === -1) continue;
+
+      const batchOrder = batch.orders[orderIndex];
+      if (batchOrder.status === 'CANCELLED') continue;
+
+      batchOrder.status = 'CANCELLED';
+      batchOrder.codAmountFils = 0;
+
+      if (!item.storeBearsDeliveryCost) {
+        batchOrder.deliveryFeeFils = 0;
+      }
+
+      cancelledCount++;
+
+      const note = `[إلغاء بعض الطلبات من إرسالية #${batch.batchNumber}] ${item.storeBearsDeliveryCost ? 'المتجر يتحمل تكلفة التوصيل لشركة الشحن' : 'المتجر لا يتحمل أي تكلفة توصيل (إعفاء كامل)'}${item.reason ? ` — سبب الإلغاء: ${item.reason}` : ''}`;
+
+      // 1. Update in GHAZAL_DEMO_ORDERS
+      const demo = getDemoOrderById(batchOrder.orderId) || getDemoOrderById(batchOrder.orderNumber);
+      if (demo) {
+        demo.status = 'CANCELLED';
+        demo.updatedAt = new Date().toISOString();
+        demo.statusHistory.unshift({
+          id: `hist-partial-cancel-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          orderId: demo.id,
+          status: 'CANCELLED',
+          notes: note,
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      // 2. Update DB
+      try {
+        await prisma.order.update({
+          where: { id: batchOrder.orderId },
+          data: { status: 'CANCELLED' }
+        });
+        await prisma.orderStatusHistory.create({
+          data: {
+            orderId: batchOrder.orderId,
+            status: 'CANCELLED',
+            notes: note
+          }
+        });
+      } catch (e) {}
+
+      // 3. Update deliveryOrders
+      if (memoryStoreState.deliveryOrders) {
+        const delRec = memoryStoreState.deliveryOrders.find(
+          d => d.orderNumber === batchOrder.orderNumber || d.id === batchOrder.orderId
+        );
+        if (delRec) {
+          delRec.status = 'RETURNED';
+        }
+      }
+    }
+
+    // Recalculate batch totals
+    batch.totalCodFils = batch.orders
+      .filter(o => o.status !== 'CANCELLED')
+      .reduce((sum, o) => sum + o.codAmountFils, 0);
+
+    batch.totalDeliveryFeeFils = batch.orders
+      .reduce((sum, o) => sum + o.deliveryFeeFils, 0);
+
+    batch.netSettlementFils = batch.totalCodFils - batch.totalDeliveryFeeFils;
+    batch.updatedAt = new Date().toISOString();
+
+    // If all orders in batch are now cancelled, mark batch as CANCELLED
+    const allCancelled = batch.orders.every(o => o.status === 'CANCELLED');
+    if (allCancelled) {
+      batch.status = 'CANCELLED';
+    }
+
+    revalidatePath('/admin/settlements');
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/deliveries');
+
+    return {
+      success: true,
+      batch,
+      message: `تم إلغاء ${cancelledCount} طلب بنجاح من إرسالية التوصيل #${batch.batchNumber} وتحديث الحسابات.`
+    };
+  } catch (error: any) {
+    console.error('cancelMultipleOrdersInCourierBatchAction error:', error);
+    return { success: false, error: error.message || 'حدث خطأ أثناء إلغاء الطلبات المحددة' };
+  }
+}
+
+// ====================================================================
+// COURIER COMPANIES MANAGEMENT (إدارة شركات التوصيل والمناديب)
+// ====================================================================
+
+export async function getCourierCompaniesAction(): Promise<CourierCompany[]> {
+  if (!memoryStoreState.courierCompanies) {
+    memoryStoreState.courierCompanies = [
+      { id: 'comp-1', name: 'سريعة إكسبرس', phone: '0791112233', type: 'COMPANY', active: true, isDefaultStoreCourier: true, defaultFeeFils: 2500, notes: 'الشركة المعتمدة الرئيسية للتوصيل لكافة محافظات المملكة', createdAt: '2026-01-01' },
+      { id: 'comp-2', name: 'أرامكس (Aramex)', phone: '065358899', type: 'COMPANY', active: true, isDefaultStoreCourier: false, defaultFeeFils: 3000, notes: 'شحنات المحافظات البعيدة والمستعجلة', createdAt: '2026-01-05' },
+      { id: 'comp-3', name: 'مندوب غزل الخاص (عين الباشا)', phone: '0795554433', type: 'DELEGATE', active: true, isDefaultStoreCourier: false, defaultFeeFils: 1500, notes: 'توصيل محلي فوري داخل لواء عين الباشا ومخيم البقعة', createdAt: '2026-01-10' }
+    ];
+  }
+  const hasDefault = memoryStoreState.courierCompanies.some(c => c.isDefaultStoreCourier);
+  if (!hasDefault && memoryStoreState.courierCompanies.length > 0) {
+    memoryStoreState.courierCompanies[0].isDefaultStoreCourier = true;
+  }
+  return memoryStoreState.courierCompanies;
+}
+
+export async function setDefaultCourierCompanyAction(companyId: string) {
+  try {
+    const list = await getCourierCompaniesAction();
+    let found = false;
+    for (const c of list) {
+      if (c.id === companyId) {
+        c.isDefaultStoreCourier = true;
+        found = true;
+      } else {
+        c.isDefaultStoreCourier = false;
+      }
+    }
+    if (!found) return { success: false, error: 'شركة التوصيل غير موجودة' };
+    (globalThis as any).__ghazal_courier_companies = list;
+    (globalThis as any).__ghazal_default_courier_id = companyId;
+    revalidatePath('/admin/deliveries');
+    revalidatePath('/admin/settlements');
+    revalidatePath('/[locale]/checkout', 'page');
+    return { success: true, defaultCompanyId: companyId };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'فشل اعتماد الشركة للمتجر' };
+  }
+}
+
+export async function saveCourierCompanyAction(data: {
+  id?: string;
+  name: string;
+  phone: string;
+  type: 'COMPANY' | 'DELEGATE';
+  active?: boolean;
+  defaultFeeFils?: number;
+  isDefaultStoreCourier?: boolean;
+  notes?: string;
+}) {
+  try {
+    if (!data.name || !data.name.trim()) {
+      return { success: false, error: 'اسم شركة التوصيل أو المندوب مطلوب' };
+    }
+    const list = await getCourierCompaniesAction();
+    if (data.id) {
+      const idx = list.findIndex(c => c.id === data.id);
+      if (idx !== -1) {
+        list[idx] = {
+          ...list[idx],
+          name: data.name.trim(),
+          phone: data.phone.trim(),
+          type: data.type,
+          active: data.active ?? list[idx].active,
+          defaultFeeFils: data.defaultFeeFils ?? list[idx].defaultFeeFils,
+          isDefaultStoreCourier: data.isDefaultStoreCourier ?? list[idx].isDefaultStoreCourier,
+          notes: data.notes?.trim()
+        };
+      }
+    } else {
+      const newComp: CourierCompany = {
+        id: `comp-${Date.now()}`,
+        name: data.name.trim(),
+        phone: data.phone.trim(),
+        type: data.type,
+        active: data.active ?? true,
+        defaultFeeFils: data.defaultFeeFils ?? 2500,
+        isDefaultStoreCourier: data.isDefaultStoreCourier ?? false,
+        notes: data.notes?.trim(),
+        createdAt: new Date().toISOString()
+      };
+      list.push(newComp);
+    }
+    (globalThis as any).__ghazal_courier_companies = list;
+    revalidatePath('/admin/deliveries');
+    revalidatePath('/admin/settlements');
+    return { success: true, companies: list };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'فشل حفظ شركة التوصيل' };
+  }
+}
+
+export async function toggleCourierCompanyStatusAction(id: string) {
+  try {
+    const list = await getCourierCompaniesAction();
+    const comp = list.find(c => c.id === id);
+    if (!comp) return { success: false, error: 'شركة التوصيل غير موجودة' };
+    comp.active = !comp.active;
+    (globalThis as any).__ghazal_courier_companies = list;
+    revalidatePath('/admin/deliveries');
+    revalidatePath('/admin/settlements');
+    return { success: true, active: comp.active };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function deleteCourierCompanyAction(id: string) {
+  try {
+    let list = await getCourierCompaniesAction();
+    memoryStoreState.courierCompanies = list.filter(c => c.id !== id);
+    (globalThis as any).__ghazal_courier_companies = memoryStoreState.courierCompanies;
+    revalidatePath('/admin/deliveries');
+    revalidatePath('/admin/settlements');
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}

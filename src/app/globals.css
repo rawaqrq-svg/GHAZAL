@@ -1,0 +1,90 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+/* ==========================================================================
+   STRICT LIGHT THEME ENFORCEMENT
+   Ensures store is permanently white (#FFFFFF) regardless of OS/Browser dark mode
+   ========================================================================== */
+:root {
+  color-scheme: only light !important;
+  --color-ivory-100: #FFFFFF;
+  --color-ivory-200: #F9FAFB;
+  --color-charcoal-900: #1A1A1A;
+}
+
+html, body {
+  color-scheme: only light !important;
+  background-color: #FFFFFF !important;
+  background: #FFFFFF !important;
+  color: #1A1A1A !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root, html, body {
+    color-scheme: only light !important;
+    background-color: #FFFFFF !important;
+    background: #FFFFFF !important;
+    color: #1A1A1A !important;
+  }
+}
+
+@theme {
+  --color-ghazal-fuchsia: #E6007E;
+  --color-ghazal-pink-soft: #FADAE6;
+  --color-ghazal-black: #1A1A1A;
+  --color-ghazal-white: #FFFFFF;
+  --color-ghazal-gray-light: #F2F2F2;
+  --color-ghazal-nude: #E9C2C9;
+
+  --color-primary: #E6007E;
+  --color-primary-hover: #C5006C;
+  --color-primary-subtle: #FADAE6;
+
+  --color-charcoal-900: #1A1A1A;
+  --color-charcoal-800: #262626;
+  --color-charcoal-700: #333333;
+  --color-charcoal-600: #4D4D4D;
+
+  --color-champagne-600: #E6007E;
+  --color-champagne-500: #FADAE6;
+  --color-champagne-400: #E9C2C9;
+
+  --color-ivory-100: #FFFFFF;
+  --color-ivory-200: #F9FAFB;
+  
+  --font-heading: var(--font-cairo);
+  --font-body: var(--font-tajawal);
+}
+
+@layer base {
+  body {
+    @apply bg-white text-[var(--color-charcoal-900)] font-body;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading font-bold text-[var(--color-charcoal-900)];
+  }
+}
+
+@media print {
+  /* Hide Admin Sidebar */
+  nav, header, footer, aside, .sidebar {
+    display: none !important;
+  }
+  
+  /* Hide Filters and Buttons */
+  button, select, input, a, .bg-white.p-4.rounded-lg.shadow-sm.mb-6 {
+    display: none !important;
+  }
+  
+  /* Ensure table takes full width */
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+  
+  body {
+    background-color: white !important;
+  }
+}

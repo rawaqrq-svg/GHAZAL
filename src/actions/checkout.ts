@@ -1,0 +1,415 @@
+'use server';
+
+import { prisma } from '@/lib/db';
+import { z } from 'zod';
+import crypto from 'crypto';
+import { getShippingZoneById, JORDAN_GOVERNORATES_SHIPPING_ZONES } from '@/lib/shipping-zones';
+import { getShippingZonesList } from '@/actions/shipping';
+import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
+import { recordRewardRedemptionForOrderAction } from '@/actions/rewards';
+import { saveDemoOrder, DemoOrder } from '@/lib/orders-catalog';
+
+const checkoutSchema = z.object({
+  customerName: z.string().min(2, 'يرجى إدخال اسم المستلم الكامل (حرفين على الأقل)'),
+  customerPhone: z.string().min(8, 'يرجى إدخال رقم هاتف صحيح للتواصل والتوصيل (مثال: 07XXXXXXXX)'),
+  detailedAddress: z.string().min(3, 'يرجى إدخال العنوان التفصيلي للتوصيل').optional(),
+  addressStreet: z.string().optional(),
+  addressBuilding: z.string().optional(),
+  addressApartment: z.string().optional(),
+  shippingZoneId: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+  appliedRewards: z.string().optional(),
+  items: z.string() // JSON string of [{ productId, variantId, quantity }]
+});
+
+export async function processCheckout(prevState: any, formData: FormData) {
+  const rawData = Object.fromEntries(formData);
+  const parsed = checkoutSchema.safeParse(rawData);
+  
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0];
+    let customMsg = 'يرجى التحقق من صحة البيانات المدخلة';
+    if (firstIssue) {
+      if (firstIssue.path.includes('customerName')) customMsg = 'يرجى إدخال الاسم الكامل للمستلم';
+      else if (firstIssue.path.includes('customerPhone')) customMsg = 'يرجى إدخال رقم هاتف أردني صحيح (07XXXXXXXX)';
+      else if (firstIssue.path.includes('detailedAddress')) customMsg = 'يرجى كتابة العنوان التفصيلي (المنطقة، الشارع، أو علامة مميزة)';
+      else customMsg = firstIssue.message || 'يرجى التحقق من صحة المدخلات';
+    }
+    return { error: customMsg };
+  }
+
+  const { customerName, customerPhone, detailedAddress, addressStreet, addressBuilding, addressApartment, shippingZoneId, idempotencyKey, appliedRewards: appliedRewardsJson, items: itemsJson } = parsed.data;
+  
+  // Resolve address fields cleanly
+  const finalStreet = detailedAddress || addressStreet || 'العنوان التفصيلي مسجل';
+  const finalBuilding = addressBuilding || 'المنزل / البناية';
+  const finalApartment = addressApartment || '';
+
+  let appliedRewardsData: any = null;
+  if (appliedRewardsJson) {
+    try {
+      appliedRewardsData = JSON.parse(appliedRewardsJson);
+    } catch (e) {}
+  }
+  
+  let parsedItems;
+  try {
+    parsedItems = JSON.parse(itemsJson);
+    if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
+      throw new Error();
+    }
+  } catch (e) {
+    return { error: 'السلة فارغة أو غير صالحة' };
+  }
+
+  // Idempotency check: Look for matching order by unique key
+  if (idempotencyKey) {
+    const existing = await prisma.order.findUnique({
+      where: { idempotencyKey },
+      include: { items: true }
+    });
+    if (existing) {
+      const setting = await prisma.siteSettings.findUnique({ where: { key: 'whatsapp_number' } });
+      let number = '';
+      if (setting) {
+        try {
+          const config = JSON.parse(setting.value);
+          number = config.number || '';
+        } catch (e) {}
+      }
+      if (!number) {
+        if (process.env.NODE_ENV === 'production') {
+          return { error: 'قناة الدفع والاتصال (واتساب) غير متوفرة حالياً، يرجى المحاولة لاحقاً' };
+        } else {
+          number = '962785050655';
+        }
+      }
+      
+      // Rebuild the exact original message from the persisted snapshots
+      let msg = `مرحباً غزل (GHAZAL) للمكياج والتجميل،\nأود تأكيد طلبي الجديد رقم: ${existing.reference}\n\n`;
+      msg += `الاسم: ${existing.customerName}\n`;
+      msg += `رقم الهاتف: ${existing.customerPhone}\n`;
+      if (existing.notes && existing.notes.includes('العنوان:')) {
+        const addressLines = existing.notes.split('\n').filter(l => l.startsWith('العنوان:'));
+        if (addressLines.length > 0) {
+          msg += `${addressLines[0]}\n`;
+        }
+      }
+      msg += `\nتفاصيل الطلب:\n`;
+      
+      for (const it of (existing.items || [])) {
+        msg += `- ${it.name} (${it.size}) x${it.quantity} = ${(it.total / 100).toFixed(2)} د.أ\n`;
+      }
+      
+      msg += `\nرسوم التوصيل: ${(existing.shippingCost / 100).toFixed(2)} د.أ\n`;
+      msg += `الإجمالي: ${(existing.totalAmount / 100).toFixed(2)} د.أ\n\n`;
+      msg += `شكراً لكم.`;
+
+      const encodedMsg = encodeURIComponent(msg);
+      return {
+        success: true,
+        reference: existing.reference,
+        whatsappUrl: `https://wa.me/${number}?text=${encodedMsg}`
+      };
+    }
+  }
+
+  // 1. جلب كل التباينات دفعة واحدة (مع دعم Fallback للكتالوج عند عدم اتصال قاعدة البيانات)
+  const variantIds = parsedItems.map((item: { variantId: string }) => item.variantId);
+  let variants: any[] = [];
+  try {
+    variants = await prisma.productVariant.findMany({
+      where: { id: { in: variantIds }, isActive: true },
+      include: { product: { select: { nameAr: true, nameEn: true, id: true } } },
+    });
+  } catch (err) {
+    // Database fallback to COSMETICS_CATALOG
+  }
+
+  // إنشاء Map سريع للبحث من قاعدة البيانات
+  const variantMap = new Map(variants.map(v => [v.id, v]));
+
+  let totalAmount = 0;
+  const orderItemsData: {
+    productId: string;
+    variantId: string;
+    sku: string;
+    name: string;
+    size: string;
+    quantity: number;
+    unitPrice: number;
+    total: number;
+  }[] = [];
+
+  for (const item of parsedItems) {
+    const { productId, variantId, quantity } = item;
+
+    if (quantity <= 0) continue;
+
+    let variant = variantMap.get(variantId);
+
+    // Fallback: ابحث في الكتالوج الاحتياطي إذا لم نجد التباين في قاعدة البيانات
+    if (!variant) {
+      for (const prod of COSMETICS_CATALOG) {
+        const foundV = prod.variants.find(v => v.id === variantId);
+        if (foundV) {
+          variant = {
+            id: foundV.id,
+            productId: prod.id,
+            sku: foundV.sku,
+            size: foundV.size || foundV.shade || 'قياسي',
+            price: foundV.price,
+            product: {
+              id: prod.id,
+              nameAr: prod.nameAr,
+              nameEn: prod.nameEn || prod.nameAr
+            }
+          };
+          break;
+        }
+      }
+    }
+
+    if (!variant) {
+      return { error: 'أحد المنتجات غير متوفر حالياً' };
+    }
+
+    const unitPrice = variant.price;
+    const total = unitPrice * quantity;
+    totalAmount += total;
+
+    orderItemsData.push({
+      productId: variant.productId,
+      variantId: variant.id,
+      sku: variant.sku,
+      name: variant.product.nameAr,
+      size: variant.size,
+      quantity,
+      unitPrice,
+      total
+    });
+  }
+
+  // Calculate Shipping (دعم جميع محافظات الأردن الـ 12)
+  let shippingCost = 0;
+  let zoneName = 'غير محدد';
+  
+  if (shippingZoneId) {
+    let zone: any = null;
+    try {
+      const allZones = await getShippingZonesList();
+      zone = allZones.find(z => z.id === shippingZoneId);
+    } catch (e) {
+      // fallback
+    }
+
+    if (!zone) {
+      try {
+        zone = await prisma.shippingZone.findUnique({
+          where: { id: shippingZoneId }
+        });
+      } catch (e) {
+        // Prisma offline
+      }
+    }
+
+    if (!zone) {
+      zone = getShippingZoneById(shippingZoneId);
+    }
+
+    if (zone && (zone.isEnabled ?? true)) {
+      shippingCost = zone.fee;
+      zoneName = zone.nameAr;
+      // Optional free shipping threshold or rewards-based free shipping
+      if ((zone.freeShippingThreshold && totalAmount >= zone.freeShippingThreshold) || (appliedRewardsData?.freeShippingApplied)) {
+        shippingCost = 0;
+      }
+    } else {
+      // Unrecognized or disabled shipping zone: Flag for admin review
+      return { error: 'منطقة التوصيل المحددة غير صالحة' };
+    }
+  } else {
+    // If no shipping zone is supplied: Shipping cost remains 0 and flags for admin review
+    return { error: 'يرجى تحديد منطقة التوصيل' };
+  }
+
+  // Calculate reward discount if applicable
+  let rewardDiscountFils = 0;
+  if (appliedRewardsData?.discountAmountFils && appliedRewardsData.discountAmountFils > 0) {
+    rewardDiscountFils = appliedRewardsData.discountAmountFils;
+  }
+
+  // Add free gifts to order items
+  if (appliedRewardsData?.appliedGiftsList && Array.isArray(appliedRewardsData.appliedGiftsList) && appliedRewardsData.appliedGiftsList.length > 0) {
+    for (const g of appliedRewardsData.appliedGiftsList) {
+      orderItemsData.push({
+        productId: g.id,
+        variantId: g.id,
+        sku: g.sku || 'GHZ-GIFT',
+        name: `🎁 [هدية مجانية] ${g.nameAr}`,
+        size: 'هدية مجانية 0.000 د.أ',
+        quantity: 1,
+        unitPrice: 0,
+        total: 0
+      });
+    }
+  } else if (appliedRewardsData?.appliedGift) {
+    const g = appliedRewardsData.appliedGift;
+    orderItemsData.push({
+      productId: g.id,
+      variantId: g.id,
+      sku: g.sku || 'GHZ-GIFT',
+      name: `🎁 [هدية مجانية] ${g.nameAr}`,
+      size: 'هدية مجانية 0.000 د.أ',
+      quantity: 1,
+      unitPrice: 0,
+      total: 0
+    });
+  }
+
+  const grandTotal = Math.max(0, totalAmount - rewardDiscountFils) + shippingCost;
+  const addressNote = detailedAddress ? `العنوان: ${detailedAddress}` : `العنوان: الشارع (${finalStreet})، البناية (${finalBuilding})${finalApartment ? `، الشقة/الطابق (${finalApartment})` : ''}`;
+
+  // 2. Create AWAITING_WHATSAPP order inside a transaction (مع معالجة استباقية عند عدم توفر قاعدة البيانات)
+  const reference = `ORD-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+
+  // Always save order to memory/catalog cache so it is instantly retrievable on invoice and tracking pages
+  try {
+    const demoOrderRecord: DemoOrder = {
+      id: reference,
+      reference,
+      customerName,
+      customerPhone,
+      status: 'AWAITING_WHATSAPP',
+      totalAmount: grandTotal,
+      shippingCost,
+      notes: addressNote,
+      addressStreet: finalStreet || detailedAddress,
+      addressBuilding: finalBuilding,
+      addressApartment: finalApartment,
+      items: orderItemsData.map((item: any, idx: number) => ({
+        id: `item-${reference}-${idx}`,
+        orderId: reference,
+        productId: item.productId,
+        variantId: item.variantId,
+        sku: item.sku,
+        name: item.name,
+        size: item.size,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        total: item.total
+      })),
+      statusHistory: [
+        {
+          id: `hist-${reference}-1`,
+          orderId: reference,
+          status: 'AWAITING_WHATSAPP',
+          notes: `تم إنشاء الطلب عبر المتجر الإلكتروني. منطقة التوصيل: ${zoneName}. ${detailedAddress}`,
+          createdAt: new Date().toISOString()
+        }
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    saveDemoOrder(demoOrderRecord);
+  } catch (err) {
+    console.warn('saveDemoOrder failed:', err);
+  }
+
+  let order: any = null;
+  try {
+    order = await prisma.$transaction(async (tx) => {
+      const newOrder = await tx.order.create({
+        data: {
+          reference,
+          customerName,
+          customerPhone,
+          status: 'AWAITING_WHATSAPP',
+          totalAmount: grandTotal,
+          shippingCost,
+          notes: addressNote,
+          idempotencyKey: idempotencyKey || undefined,
+          items: {
+            create: orderItemsData
+          },
+          statusHistory: {
+            create: {
+              status: 'AWAITING_WHATSAPP',
+              notes: `Order initiated via Web Checkout. Zone: ${zoneName}. ${detailedAddress}`
+            }
+          }
+        }
+      });
+      return newOrder;
+    });
+  } catch (dbErr) {
+    console.warn('Prisma order creation failed, proceeding with WhatsApp message generation');
+  }
+
+  // Record Reward Redemption in rewards engine
+  if (appliedRewardsData && (appliedRewardsData.appliedGift || (appliedRewardsData.appliedGiftsList && appliedRewardsData.appliedGiftsList.length > 0) || appliedRewardsData.freeShippingApplied || rewardDiscountFils > 0)) {
+    try {
+      await recordRewardRedemptionForOrderAction({
+        orderId: reference,
+        orderNumber: reference.replace('ORD-', ''),
+        customerName,
+        customerPhone,
+        basketTotalFils: grandTotal,
+        appliedGift: appliedRewardsData.appliedGift || (appliedRewardsData.appliedGiftsList && appliedRewardsData.appliedGiftsList[0]),
+        freeShippingApplied: Boolean(appliedRewardsData.freeShippingApplied),
+        freeShippingFeeFils: 2000,
+        discountAmountFils: rewardDiscountFils
+      });
+    } catch (err) {
+      console.error('Error recording reward redemption:', err);
+    }
+  }
+
+  // Get WhatsApp official number from database setting or default
+  let whatsappNumber = '962785050655';
+  try {
+    const setting = await prisma.siteSettings.findUnique({ where: { key: 'whatsapp_number' } });
+    if (setting) {
+      const config = JSON.parse(setting.value);
+      if (config.number) whatsappNumber = config.number;
+    }
+  } catch (e) {}
+
+  // 3. Generate secure WhatsApp message
+  let message = `مرحباً غزل (GHAZAL) للمكياج والتجميل،\nأود تأكيد طلبي الجديد رقم: ${reference}\n\n`;
+  message += `الاسم: ${customerName}\n`;
+  message += `رقم الهاتف: ${customerPhone}\n`;
+  message += `منطقة التوصيل: ${zoneName}\n`;
+  message += `${detailedAddress}\n\n`;
+  message += `تفاصيل الطلب:\n`;
+  
+  for (const item of orderItemsData) {
+    if (item.unitPrice === 0) {
+      message += `- ${item.name} x${item.quantity} = مجاناً 0.000 د.أ 🎁\n`;
+    } else {
+      message += `- ${item.name} (${item.size}) x${item.quantity} = ${(item.total / 1000).toFixed(3)} د.أ\n`;
+    }
+  }
+  
+  if (appliedRewardsData?.freeShippingApplied) {
+    message += `\nرسوم التوصيل: مجاني (مكافأة سلة غزل 🎉)\n`;
+  } else {
+    message += `\nرسوم التوصيل: ${(shippingCost / 1000).toFixed(3)} د.أ\n`;
+  }
+
+  if (rewardDiscountFils > 0) {
+    message += `خصم المكافأة: -${(rewardDiscountFils / 1000).toFixed(3)} د.أ\n`;
+  }
+
+  message += `الإجمالي النهائي: ${(grandTotal / 1000).toFixed(3)} د.أ\n\n`;
+  message += `شكراً لكم.`;
+
+  const encodedMessage = encodeURIComponent(message);
+  const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodedMessage}`;
+
+  return {
+    success: true,
+    reference,
+    whatsappUrl
+  };
+}

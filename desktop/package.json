@@ -1,0 +1,44 @@
+{
+  "name": "ghazal-pos-desktop",
+  "version": "1.0.0",
+  "description": "تطبيق كاشير غزل لسطح المكتب - Windows 10/11",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:ts": "tsc -p tsconfig.json",
+    "start": "tsc -p tsconfig.json && electron .",
+    "dist": "tsc -p tsconfig.json && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "typescript": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.ghazal.pos",
+    "productName": "GHAZAL POS",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "../public/logo.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GHAZAL POS"
+    }
+  },
+  "onlyBuiltDependencies": [
+    "electron"
+  ],
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

@@ -1,0 +1,80 @@
+# Dependencies
+node_modules/
+**/node_modules/
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Next.js & Electron build outputs
+.next/
+**/.next/
+out/
+**/out/
+build/
+**/build/
+dist/
+**/dist/
+release/
+**/release/
+desktop/dist/
+desktop/release/
+desktop/node_modules/
+
+# Environment variables & secrets (NEVER COMMIT SECRETS)
+.env
+.env*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Next.js telemetry & cache
+.next/cache
+.turbo
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Executable builds & electron binaries
+*.exe
+*.zip
+*.dll
+*.pak
+*.bin
+*.dat
+vk_swiftshader_icd.json
+locales/
+**/locales/
+resources/
+**/resources/
+LICENSES.chromium.html
+LICENSE.electron.txt
+*.tsbuildinfo
+scratch_*.ts
+
+# IDE & Editor files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Antigravity / Gemini internal logs
+.gemini
+.system_generated
+brain
