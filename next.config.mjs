@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  reactStrictMode: true,
+  serverExternalPackages: ['argon2', 'sharp', 'xlsx', '@prisma/client', 'pg'],
   experimental: {
     serverActions: {
       bodySizeLimit: '100mb',
@@ -15,6 +17,9 @@ const nextConfig = {
         '192.168.*',
         '10.*',
         '172.*',
+        '*.vercel.app',
+        '*.vercel.sh',
+        'vercel.app',
       ],
     },
   },

@@ -20,13 +20,41 @@ desktop/dist/
 desktop/release/
 desktop/node_modules/
 
-# Environment variables & secrets (NEVER COMMIT SECRETS)
+# Environment files & secrets (NEVER COMMIT REAL CREDENTIALS)
 .env
+.env.*
 .env*.local
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+!.env.example
+!.env.test.example
+
+# Database Backups & Dumps (NEVER COMMIT DATABASE DUMPS)
+backup/
+**/backup/
+backups/
+**/backups/
+database_backups/
+*.dump
+*.bak
+*.rdb
+*.sql
+!prisma/migrations/**/*.sql
+
+# Cryptographic Keys & Private Credentials
+*.pem
+*.key
+*.pfx
+*.p12
+*.pkcs12
+*.cer
+*.crt
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# User uploaded content in local development
+public/uploads/*
+!public/uploads/.gitkeep
 
 # Debug logs
 npm-debug.log*
@@ -35,9 +63,11 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Next.js telemetry & cache
+# Next.js telemetry, cache & tests
 .next/cache
 .turbo
+coverage/
+.nyc_output/
 
 # Operating System files
 .DS_Store

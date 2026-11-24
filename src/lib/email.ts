@@ -24,7 +24,6 @@ export interface NewOrderEmailPayload {
   createdAt?: string;
 }
 
-const DEFAULT_API_KEY = 're_PLACEHOLDER_KEY_REMOVED';
 const DEFAULT_FROM = 'onboarding@resend.dev';
 const DEFAULT_TO = 'storeghazal0@gmail.com';
 
@@ -34,7 +33,11 @@ function formatJOD(fils: number): string {
 
 export async function sendNewOrderNotificationEmail(payload: NewOrderEmailPayload): Promise<{ success: boolean; id?: string; error?: string }> {
   try {
-    const apiKey = process.env.RESEND_API_KEY || DEFAULT_API_KEY;
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.warn('[Resend Email] RESEND_API_KEY is not configured. Order notification email skipped.');
+      return { success: false, error: 'RESEND_API_KEY is not configured' };
+    }
     const resend = new Resend(apiKey);
 
     const from = process.env.RESEND_FROM_EMAIL || DEFAULT_FROM;
@@ -314,7 +317,11 @@ export async function sendBackupSuccessEmail(
   payload: BackupSuccessEmailPayload
 ): Promise<{ success: boolean; id?: string; error?: string }> {
   try {
-    const apiKey = process.env.RESEND_API_KEY || DEFAULT_API_KEY;
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.warn('[Resend Email] RESEND_API_KEY is not configured. Backup success report email skipped.');
+      return { success: false, error: 'RESEND_API_KEY is not configured' };
+    }
     const resend = new Resend(apiKey);
 
     const from = process.env.BACKUP_EMAIL_FROM || process.env.RESEND_FROM_EMAIL || DEFAULT_FROM;
@@ -497,7 +504,11 @@ export async function sendBackupFailureEmail(
   payload: BackupFailureEmailPayload
 ): Promise<{ success: boolean; id?: string; error?: string }> {
   try {
-    const apiKey = process.env.RESEND_API_KEY || DEFAULT_API_KEY;
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.warn('[Resend Email] RESEND_API_KEY is not configured. Backup failure alert email skipped.');
+      return { success: false, error: 'RESEND_API_KEY is not configured' };
+    }
     const resend = new Resend(apiKey);
 
     const from = process.env.BACKUP_EMAIL_FROM || process.env.RESEND_FROM_EMAIL || DEFAULT_FROM;

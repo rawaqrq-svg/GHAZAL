@@ -484,10 +484,11 @@ function getFsModule() {
 }
 
 function loadPersistedOrders(): DemoOrder[] | null {
+  if (process.env.NODE_ENV === 'production') return null;
   const m = getFsModule();
   if (!m) return null;
   try {
-    const filePath = m.path.join(process.cwd(), 'src', 'data', 'demo-orders.json');
+    const filePath = m.path.join(/*turbopackIgnore: true*/ process.cwd(), 'src', 'data', 'demo-orders.json');
     if (m.fs.existsSync(filePath)) {
       const content = m.fs.readFileSync(filePath, 'utf-8');
       const parsed = JSON.parse(content);
@@ -502,14 +503,15 @@ function loadPersistedOrders(): DemoOrder[] | null {
 }
 
 function persistOrdersToDisk(orders: DemoOrder[]): void {
+  if (process.env.NODE_ENV === 'production') return;
   const m = getFsModule();
   if (!m) return;
   try {
-    const dirPath = m.path.join(process.cwd(), 'src', 'data');
+    const dirPath = m.path.join(/*turbopackIgnore: true*/ process.cwd(), 'src', 'data');
     if (!m.fs.existsSync(dirPath)) {
       m.fs.mkdirSync(dirPath, { recursive: true });
     }
-    const filePath = m.path.join(dirPath, 'demo-orders.json');
+    const filePath = m.path.join(/*turbopackIgnore: true*/ dirPath, 'demo-orders.json');
     m.fs.writeFileSync(filePath, JSON.stringify(orders, null, 2), 'utf-8');
   } catch {
     // ignore
