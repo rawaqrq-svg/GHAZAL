@@ -104,7 +104,7 @@ const defaultCarouselSettings = {
   autoplayIntervalMs: 4000,
   pauseOnHover: true,
   showIndicators: true,
-  showNavigation: true,
+  showNavigation: false,
   transitionType: 'FADE'
 };
 

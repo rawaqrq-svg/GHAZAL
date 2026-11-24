@@ -43,7 +43,7 @@ const getInitialTab = (param?: string): 'READY_ORDERS' | 'BATCHES' | 'ALL_ORDERS
   const clean = param.toLowerCase().trim();
   if (clean === 'ready' || clean === 'ready_orders' || clean === 'ready-orders') return 'READY_ORDERS';
   if (clean === 'batches' || clean === 'courier-batches' || clean === 'courier-settlements' || clean === 'settlements' || clean === 'cod') return 'BATCHES';
-  if (clean === 'all-orders' || clean === 'all_orders' || clean === 'orders') return 'ALL_ORDERS';
+  if (clean === 'all-orders' || clean === 'all_orders' || clean === 'orders' || clean === 'all-deliveries' || clean === 'deliveries') return 'ALL_ORDERS';
   if (clean === 'shipping-zones' || clean === 'shipping' || clean === 'pricing' || clean === 'zones') return 'SHIPPING_ZONES';
   if (clean === 'courier-companies' || clean === 'couriers' || clean === 'companies' || clean === 'delegates') return 'COURIER_COMPANIES';
   return 'READY_ORDERS';
@@ -851,13 +851,17 @@ export function DeliveriesClient({
         </div>
 
         <div 
-          onClick={() => handleTabChange('BATCHES')}
-          className="p-4 rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 cursor-pointer transition shadow-2xs"
+          onClick={() => handleTabChange('ALL_ORDERS')}
+          className={`p-4 rounded-2xl border cursor-pointer transition shadow-2xs ${
+            activeTab === 'ALL_ORDERS'
+              ? 'bg-zinc-100 border-zinc-400 ring-2 ring-zinc-400/20'
+              : 'bg-white border-zinc-200 hover:bg-zinc-50'
+          }`}
         >
           <div className="flex items-center justify-between text-xs font-bold text-zinc-500 mb-1">
-            <span>إجمالي طلبيات الشحن</span>
-            <span className="p-1.5 rounded-lg bg-pink-100 text-[#E6007E]">
-              <FileText className="w-4 h-4" />
+            <span>كافة طلبيات التوصيل</span>
+            <span className="p-1.5 rounded-lg bg-zinc-800 text-white">
+              <Truck className="w-4 h-4" />
             </span>
           </div>
           <p className="text-2xl font-black font-mono text-zinc-900">{courierBatches.length}</p>
@@ -954,10 +958,12 @@ export function DeliveriesClient({
               : 'text-zinc-700 hover:bg-white hover:text-zinc-900'
           }`}
         >
-          <Package className="w-4 h-4" />
-          <span>سجل كافة طلبات التوصيل</span>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-800">
-            {deliveryOrders.length}
+          <Truck className="w-4 h-4" />
+          <span>كافة طلبيات التوصيل</span>
+          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
+            activeTab === 'ALL_ORDERS' ? 'bg-zinc-900 text-white' : 'bg-zinc-200 text-zinc-800'
+          }`}>
+            {courierBatches.length} طلبية
           </span>
         </button>
 
@@ -1436,105 +1442,237 @@ export function DeliveriesClient({
       )}
 
       {/* ==================================================================== */}
-      {/* TAB 3: ALL DELIVERY ORDERS ARCHIVE                                   */}
+      {/* TAB 3: ALL COURIER SHIPMENTS & BATCHES ARCHIVE                       */}
       {/* ==================================================================== */}
       {activeTab === 'ALL_ORDERS' && (
-        <div className="bg-white rounded-3xl border border-zinc-200 shadow-xs overflow-hidden animate-fade-in">
-          <div className="p-4 bg-zinc-50 border-b border-zinc-200 flex items-center justify-between">
-            <h3 className="font-black text-sm text-zinc-900">سجل كافة طلبيات المتجر الإلكتروني ({deliveryOrders.length})</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-start text-xs border-collapse">
-              <thead className="bg-zinc-100/70 text-zinc-700 font-bold border-b border-zinc-200">
-                <tr>
-                  <th className="p-3.5 text-start">رقم الطلب</th>
-                  <th className="p-3.5 text-start">الطلبية / الإرسالية</th>
-                  <th className="p-3.5 text-start">تاريخ الطلب</th>
-                  <th className="p-3.5 text-start">اسم العميل</th>
-                  <th className="p-3.5 text-start">شركة الشحن / المدينة</th>
-                  <th className="p-3.5 text-start">قيمة التحصيل (COD)</th>
-                  <th className="p-3.5 text-start">حالة التوصيل</th>
-                  <th className="p-3.5 text-center">الإجراء</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-100">
-                {deliveryOrders.map((ord) => {
-                  const parentBatch = courierBatches.find(b =>
-                    b.orders.some(o => o.orderId === ord.id || o.orderNumber === ord.orderNumber || o.orderNumber === ord.id)
-                  );
+        <div className="space-y-4 animate-fade-in">
+          {/* Filter & Search Toolbar */}
+          <div className="bg-white rounded-3xl border border-zinc-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex-1 relative">
+              <Search className="w-4 h-4 text-zinc-400 absolute start-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="البحث برقم طلبية التوصيل، شركة الشحن، أو رقم أي طلب بداخلها..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full ps-10 pe-4 py-2.5 border border-zinc-200 rounded-2xl text-xs font-bold outline-none focus:border-[#E6007E] focus:ring-2 focus:ring-pink-100 transition"
+              />
+            </div>
 
-                  return (
-                    <tr key={ord.id} className="hover:bg-zinc-50 transition">
-                      <td className="p-3.5 font-mono font-bold text-purple-700">
-                        <Link href={isPOS ? `/pos/orders?search=${ord.orderNumber}` : `/admin/orders/${ord.id}`} className="hover:underline">
-                          {ord.orderNumber}
-                        </Link>
-                      </td>
-                      <td className="p-3.5">
-                        {parentBatch ? (
-                          <button
-                            type="button"
-                            onClick={() => setSelectedBatchDetails(parentBatch)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-200 transition cursor-pointer"
-                            title="عرض تفاصيل هذه الطلبية"
-                          >
-                            <Truck className="w-3 h-3 text-purple-700" />
-                            <span>{parentBatch.batchNumber} ({parentBatch.orders.length} طلبات)</span>
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-zinc-400 font-bold">إرسالية منفردة</span>
-                        )}
-                      </td>
-                      <td className="p-3.5 font-mono text-zinc-500">{ord.date}</td>
-                      <td className="p-3.5 font-bold text-zinc-900">{ord.customerName}</td>
-                      <td className="p-3.5 text-zinc-600">
-                        <span className="block font-bold text-zinc-800">{ord.companyName}</span>
-                        <span className="text-[11px] text-zinc-400">{ord.city}</span>
-                      </td>
-                      <td className="p-3.5 font-mono font-black text-zinc-900">
-                        {formatMoney(ord.codAmountFils)} د.أ
-                      </td>
-                      <td className="p-3.5">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                          ord.status === 'SETTLED' 
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : ord.status === 'DELIVERED_COLLECTED'
-                            ? 'bg-blue-100 text-blue-800'
-                            : ord.status === 'IN_TRANSIT'
-                            ? 'bg-teal-100 text-teal-800'
-                            : 'bg-rose-100 text-rose-800'
-                        }`}>
-                          {ord.status === 'SETTLED' && 'تمت التسوية 💰'}
-                          {ord.status === 'DELIVERED_COLLECTED' && 'تم التوصيل والتحصيل ✓'}
-                          {ord.status === 'IN_TRANSIT' && 'مع التوصيل 🚚'}
-                          {ord.status === 'RETURNED' && 'مرتجع ↩'}
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleViewBatchForOrder(ord)}
-                            className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-black text-white text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
-                            title="عرض تفاصيل الطلبية وكافة الطلبات المشمولة بها"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-pink-400" />
-                            <span>تفاصيل الطلبية {parentBatch ? `(${parentBatch.orders.length})` : ''}</span>
-                          </button>
-                          <Link
-                            href={isPOS ? `/pos/orders?search=${ord.orderNumber}` : `/admin/orders/${ord.id}`}
-                            className="px-2.5 py-1 rounded-lg border border-zinc-200 text-xs font-bold text-zinc-700 hover:bg-zinc-100 transition"
-                            title="تعديل هذا الطلب"
-                          >
-                            الطلب
-                          </Link>
-                        </div>
-                      </td>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold text-zinc-400 shrink-0">شركة التوصيل:</span>
+              <select
+                value={courierFilter}
+                onChange={(e) => setCourierFilter(e.target.value)}
+                className="border border-zinc-200 rounded-xl px-3 py-2 text-xs font-bold text-zinc-700 bg-white outline-none focus:border-[#E6007E]"
+              >
+                <option value="ALL">كافة الشركات والمناديب</option>
+                {courierCompanies.map((c) => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+
+              <span className="text-xs font-bold text-zinc-400 shrink-0">الحالة:</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="border border-zinc-200 rounded-xl px-3 py-2 text-xs font-bold text-zinc-700 bg-white outline-none focus:border-[#E6007E]"
+              >
+                <option value="ALL">كافة الحالات</option>
+                <option value="OUT_FOR_DELIVERY">خرجت للتوصيل 🚚</option>
+                <option value="PREPARED">تم التجهيز</option>
+                <option value="DELIVERED">تم التوصيل للزبائن ✓</option>
+                <option value="SETTLED">تمت التسوية وتوريد الكاش 💰</option>
+                <option value="CANCELLED">ملغاة</option>
+              </select>
+            </div>
+          </div>
+
+          {/* KPI Summary Strip */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className="bg-white p-3.5 rounded-2xl border border-zinc-200 shadow-2xs">
+              <span className="text-[11px] font-bold text-zinc-400 block mb-0.5">عدد الطلبيات</span>
+              <p className="text-lg font-black font-mono text-zinc-900">{filteredBatches.length} طلبية</p>
+            </div>
+            <div className="bg-white p-3.5 rounded-2xl border border-zinc-200 shadow-2xs">
+              <span className="text-[11px] font-bold text-zinc-400 block mb-0.5">إجمالي الطلبات المشمولة</span>
+              <p className="text-lg font-black font-mono text-purple-700">
+                {filteredBatches.reduce((acc, b) => acc + (b.orders?.length || 0), 0)} طلب
+              </p>
+            </div>
+            <div className="bg-white p-3.5 rounded-2xl border border-zinc-200 shadow-2xs">
+              <span className="text-[11px] font-bold text-zinc-400 block mb-0.5">إجمالي التحصيل (COD)</span>
+              <p className="text-lg font-black font-mono text-zinc-900">
+                {formatMoney(filteredBatches.reduce((acc, b) => acc + (b.totalCodFils || 0), 0))} د.أ
+              </p>
+            </div>
+            <div className="bg-white p-3.5 rounded-2xl border border-zinc-200 shadow-2xs">
+              <span className="text-[11px] font-bold text-zinc-400 block mb-0.5">إجمالي أجور التوصيل</span>
+              <p className="text-lg font-black font-mono text-rose-600">
+                -{formatMoney(filteredBatches.reduce((acc, b) => acc + (b.totalDeliveryFeeFils || 0), 0))} د.أ
+              </p>
+            </div>
+            <div className="bg-white p-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/40 shadow-2xs">
+              <span className="text-[11px] font-bold text-emerald-800 block mb-0.5">صافي مستحقات المحل</span>
+              <p className="text-lg font-black font-mono text-emerald-700">
+                {formatMoney(filteredBatches.reduce((acc, b) => acc + (b.netSettlementFils || 0), 0))} د.أ
+              </p>
+            </div>
+          </div>
+
+          {/* Master Courier Batches Table */}
+          <div className="bg-white rounded-3xl border border-zinc-200 shadow-xs overflow-hidden">
+            <div className="p-4 bg-zinc-50/80 border-b border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Truck className="w-4 h-4 text-[#E6007E]" />
+                <h3 className="font-black text-sm text-zinc-900">
+                  كافة طلبيات وشحنات شركة التوصيل ({filteredBatches.length} طلبية)
+                </h3>
+              </div>
+              <span className="text-xs font-bold text-zinc-400">
+                تتضمن كل طلبية مجموعة طلبات مجمعة مع تفاصيل مبالغها وأجورها
+              </span>
+            </div>
+
+            {filteredBatches.length === 0 ? (
+              <div className="p-12 text-center text-zinc-400 space-y-2">
+                <Truck className="w-10 h-10 text-zinc-300 mx-auto" />
+                <h4 className="font-bold text-sm text-zinc-700">لا توجد طلبيات توصيل مطابقة</h4>
+                <p className="text-xs text-zinc-400">يمكنك تعديل خيارات البحث أو إنشاء طلبية جديدة من تبويب &quot;الطلبات الجاهزة&quot;</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-start text-xs border-collapse">
+                  <thead className="bg-zinc-100/70 text-zinc-700 font-bold border-b border-zinc-200">
+                    <tr>
+                      <th className="p-3.5 text-start">رقم / كود الطلبية</th>
+                      <th className="p-3.5 text-start">شركة التوصيل</th>
+                      <th className="p-3.5 text-start">تاريخ الإرسال</th>
+                      <th className="p-3.5 text-center">عدد الطلبات المشمولة</th>
+                      <th className="p-3.5 text-start">إجمالي التحصيل (COD)</th>
+                      <th className="p-3.5 text-start">أجرة التوصيل</th>
+                      <th className="p-3.5 text-start">الصافي للمحل</th>
+                      <th className="p-3.5 text-start">حالة الطلبية</th>
+                      <th className="p-3.5 text-center">الإجراءات</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100">
+                    {filteredBatches.map((batch) => {
+                      const isLocked = batch.status === 'DELIVERED' || batch.status === 'SETTLED' || batch.status === 'CANCELLED';
+                      const statusBadge = {
+                        'PREPARED': { label: 'تم التجهيز', bg: 'bg-purple-100 text-purple-900 border-purple-200' },
+                        'OUT_FOR_DELIVERY': { label: 'خرجت للتوصيل 🚚', bg: 'bg-teal-100 text-teal-900 border-teal-200' },
+                        'DELIVERED': { label: 'تم التوصيل للزبائن ✓', bg: 'bg-blue-100 text-blue-900 border-blue-200' },
+                        'SETTLED': { label: 'تمت التسوية وتوريد الكاش 💰', bg: 'bg-emerald-100 text-emerald-900 border-emerald-200' },
+                        'CANCELLED': { label: 'ملغاة ✕', bg: 'bg-rose-100 text-rose-900 border-rose-200' }
+                      }[batch.status] || { label: batch.status, bg: 'bg-zinc-100 text-zinc-800 border-zinc-200' };
+
+                      return (
+                        <tr key={batch.id} className="hover:bg-zinc-50/80 transition">
+                          {/* Batch ID */}
+                          <td className="p-3.5 font-mono font-bold text-zinc-900">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[#E6007E] font-black">#{batch.batchNumber}</span>
+                              {isLocked && (
+                                <span title="مقفل">
+                                  <Lock className="w-3 h-3 text-zinc-400" />
+                                </span>
+                              )}
+                            </div>
+                            {batch.notes && (
+                              <span className="block text-[10px] text-zinc-400 font-sans mt-0.5 line-clamp-1">
+                                {batch.notes}
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Courier Company */}
+                          <td className="p-3.5">
+                            <span className="font-extrabold text-zinc-900 block">{batch.courierName}</span>
+                          </td>
+
+                          {/* Date */}
+                          <td className="p-3.5 font-mono text-zinc-500 text-[11px]">
+                            {formatJordanDate(batch.createdAt)}
+                          </td>
+
+                          {/* Orders Count in Batch */}
+                          <td className="p-3.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedBatchDetails(batch)}
+                              className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-200 transition cursor-pointer"
+                              title="انقري لعرض كافة الطلبات المشمولة بهذه الطلبية"
+                            >
+                              <Package className="w-3.5 h-3.5 text-purple-700" />
+                              <span>{batch.orders?.length || 0} طلبات</span>
+                            </button>
+                          </td>
+
+                          {/* Total COD Amount */}
+                          <td className="p-3.5 font-mono font-black text-zinc-900">
+                            {formatMoney(batch.totalCodFils)} د.أ
+                          </td>
+
+                          {/* Total Delivery Fee */}
+                          <td className="p-3.5 font-mono font-bold text-rose-600">
+                            -{formatMoney(batch.totalDeliveryFeeFils || 0)} د.أ
+                          </td>
+
+                          {/* Net Settlement Amount */}
+                          <td className="p-3.5 font-mono font-black text-emerald-700 bg-emerald-50/30">
+                            {formatMoney(batch.netSettlementFils || 0)} د.أ
+                          </td>
+
+                          {/* Status */}
+                          <td className="p-3.5">
+                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-black border ${statusBadge.bg}`}>
+                              {statusBadge.label}
+                            </span>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="p-3.5 text-center">
+                            <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedBatchDetails(batch)}
+                                className="px-2.5 py-1 rounded-xl bg-zinc-900 hover:bg-black text-white text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                                title="عرض تفاصيل الطلبية وقائمة الطلبات"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-pink-400" />
+                                <span>عرض الطلبات ({batch.orders?.length || 0})</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handlePrintManifest(batch)}
+                                className="px-2.5 py-1 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                                title="طباعة كشف المانفيست A4"
+                              >
+                                <Printer className="w-3.5 h-3.5 text-purple-700" />
+                                <span>مانفيست</span>
+                              </button>
+
+                              {!isPOS && (batch.status === 'DELIVERED' || batch.status === 'OUT_FOR_DELIVERY') && (
+                                <Link
+                                  href="/admin/settlements?q=courier-settlements"
+                                  className="px-2.5 py-1 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition flex items-center gap-1"
+                                  title="تسوية هذه الطلبية في الحسابات"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>تسوية</span>
+                                </Link>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

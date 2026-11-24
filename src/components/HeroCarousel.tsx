@@ -323,26 +323,6 @@ export function HeroCarousel({ slides, settings }: HeroCarouselProps) {
         })}
       </div>
 
-      {/* Prev / Next controls */}
-      {settings.showNavigation && activeSlides.length > 1 && (
-        <>
-          <button
-            onClick={handlePrev}
-            className="absolute top-1/2 -translate-y-1/2 end-3 sm:end-6 z-20 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-[#E6007E] text-white flex items-center justify-center border border-white/20 backdrop-blur-xs opacity-90 sm:opacity-0 sm:group-hover/carousel:opacity-100 transition-all shadow-lg focus:opacity-100 active:scale-95"
-            aria-label={isAr ? 'السابق' : 'Previous slide'}
-          >
-            {isAr ? '→' : '←'}
-          </button>
-          <button
-            onClick={handleNext}
-            className="absolute top-1/2 -translate-y-1/2 start-3 sm:start-6 z-20 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-[#E6007E] text-white flex items-center justify-center border border-white/20 backdrop-blur-xs opacity-90 sm:opacity-0 sm:group-hover/carousel:opacity-100 transition-all shadow-lg focus:opacity-100 active:scale-95"
-            aria-label={isAr ? 'التالي' : 'Next slide'}
-          >
-            {isAr ? '←' : '→'}
-          </button>
-        </>
-      )}
-
       {/* Autoplay Visual Progress Bar */}
       {isAutoplayActive && !isPaused && activeSlides.length > 1 && (
         <>
