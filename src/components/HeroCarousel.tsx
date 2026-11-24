@@ -61,7 +61,23 @@ export function HeroCarousel({ slides, settings }: HeroCarouselProps) {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
 
   const autoPlayTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const resumeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const touchStartXRef = useRef<number | null>(null);
+
+  // Autoplay intervals and configuration
+  const intervalMs = settings?.autoplayIntervalMs && settings.autoplayIntervalMs >= 1000 
+    ? settings.autoplayIntervalMs 
+    : 4000;
+  const isAutoplayActive = settings?.autoplayEnabled !== false;
+
+  // Temporarily pause on manual action and automatically resume after 4s
+  const temporarilyPauseAndResume = () => {
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    setIsPaused(true);
+    resumeTimerRef.current = setTimeout(() => {
+      setIsPaused(false);
+    }, 4000);
+  };
 
   // 1. Detect user preference for reduced motion
   useEffect(() => {
@@ -106,23 +122,28 @@ export function HeroCarousel({ slides, settings }: HeroCarouselProps) {
   const isVideo = (path: string) => /\.(mp4|webm|ogg)$/i.test(path || '');
 
   // 3. Autoplay rotation logic
-  const startAutoplay = () => {
+  useEffect(() => {
     if (autoPlayTimerRef.current) clearInterval(autoPlayTimerRef.current);
-    if (!settings.autoplayEnabled || isPaused || prefersReducedMotion || activeSlides.length <= 1) {
+
+    if (!isAutoplayActive || isPaused || prefersReducedMotion || activeSlides.length <= 1) {
       return;
     }
+
     autoPlayTimerRef.current = setInterval(() => {
       setCurrentIndex(prev => (prev + 1) % activeSlides.length);
-    }, settings.autoplayIntervalMs);
-  };
+    }, intervalMs);
 
-  useEffect(() => {
-    startAutoplay();
     return () => {
       if (autoPlayTimerRef.current) clearInterval(autoPlayTimerRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, isPaused, prefersReducedMotion, activeSlides.length]);
+  }, [currentIndex, isPaused, prefersReducedMotion, activeSlides.length, isAutoplayActive, intervalMs]);
+
+  // Cleanup resume timer on unmount
+  useEffect(() => {
+    return () => {
+      if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    };
+  }, []);
 
   // Pause autoplay when the browser tab is hidden
   useEffect(() => {
@@ -143,13 +164,13 @@ export function HeroCarousel({ slides, settings }: HeroCarouselProps) {
 
   // 4. Manual controls
   const handlePrev = () => {
-    setIsPaused(true);
     setCurrentIndex(prev => (prev - 1 + activeSlides.length) % activeSlides.length);
+    temporarilyPauseAndResume();
   };
 
   const handleNext = () => {
-    setIsPaused(true);
     setCurrentIndex(prev => (prev + 1) % activeSlides.length);
+    temporarilyPauseAndResume();
   };
 
   // Keyboard navigation
@@ -176,7 +197,6 @@ export function HeroCarousel({ slides, settings }: HeroCarouselProps) {
     
     // Swipe threshold 50px
     if (Math.abs(diff) > 50) {
-      setIsPaused(true);
       if (diff > 0) {
         // Swipe left: next slide in LTR, previous slide in RTL
         if (isAr) handlePrev();
@@ -323,6 +343,25 @@ export function HeroCarousel({ slides, settings }: HeroCarouselProps) {
         </>
       )}
 
+      {/* Autoplay Visual Progress Bar */}
+      {isAutoplayActive && !isPaused && activeSlides.length > 1 && (
+        <>
+          <style>{`
+            @keyframes ghazalHeroProgress {
+              0% { transform: scaleX(0); }
+              100% { transform: scaleX(1); }
+            }
+          `}</style>
+          <div 
+            key={`${currentIndex}-${intervalMs}`}
+            className="absolute bottom-0 inset-x-0 h-1 bg-gradient-to-r from-[#E6007E] via-pink-400 to-[#E6007E] z-30 origin-left pointer-events-none opacity-80"
+            style={{
+              animation: `ghazalHeroProgress ${intervalMs}ms linear forwards`
+            }}
+          />
+        </>
+      )}
+
       {/* Indicators */}
       {settings.showIndicators && activeSlides.length > 1 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex gap-2">
@@ -330,10 +369,10 @@ export function HeroCarousel({ slides, settings }: HeroCarouselProps) {
             <button
               key={index}
               onClick={() => {
-                setIsPaused(true);
                 setCurrentIndex(index);
+                temporarilyPauseAndResume();
               }}
-              className={`h-2 rounded-full transition-all ${
+              className={`h-2 rounded-full transition-all cursor-pointer ${
                 index === currentIndex 
                   ? 'bg-[#E6007E] w-6' 
                   : 'bg-white/50 hover:bg-white/80 w-2'

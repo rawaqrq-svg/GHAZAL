@@ -10,6 +10,7 @@ import {
   updateStoreLocationSettings 
 } from '@/actions/homepage-cms';
 import { uploadMedia } from '@/actions/upload';
+import { HeroCarousel } from '@/components/HeroCarousel';
 
 const isVideo = (path: string) => /\.(mp4|webm|ogg|mov)$/i.test(path || '');
 
@@ -516,7 +517,7 @@ export function CMSHomepageForm({
           <div className="space-y-2 max-w-md">
             <label className="text-xs font-bold text-zinc-650">سرعة التناوب تلقائياً (سرعة العرض)</label>
             <div className="flex gap-2">
-              {[3000, 5000, 7000, 10000].map(ms => (
+              {[3000, 4000, 5000, 7000, 10000].map(ms => (
                 <button
                   key={ms}
                   type="button"
@@ -558,10 +559,55 @@ export function CMSHomepageForm({
 
       {/* 2. HERO SLIDES MANAGER */}
       <div className="bg-white p-6 rounded-lg border border-[var(--color-ivory-200)] shadow-sm space-y-6">
-        <div className="border-b pb-3">
-          <h2 className="text-base font-bold text-[var(--color-charcoal-800)]">إدارة شرائح إعلانات الهيرو (Hero Slides Manager)</h2>
-          <p className="text-[10px] text-zinc-400 mt-1">تعديل المحتوى، وتنسيق وترتيب صور الهيرو.</p>
+        <div className="border-b pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-[var(--color-charcoal-800)]">إدارة شرائح إعلانات الهيرو (Hero Slides Manager)</h2>
+            <p className="text-[10px] text-zinc-400 mt-1">تعديل المحتوى، وتنسيق وترتيب صور الهيرو والتبديل التلقائي بينها.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
+              carousel.autoplayEnabled && slides.filter(s => s.isEnabled).length > 1
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : 'bg-amber-50 text-amber-700 border border-amber-200'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${
+                carousel.autoplayEnabled && slides.filter(s => s.isEnabled).length > 1
+                  ? 'bg-emerald-500 animate-pulse'
+                  : 'bg-amber-500'
+              }`} />
+              <span>
+                {carousel.autoplayEnabled && slides.filter(s => s.isEnabled).length > 1
+                  ? `التبديل التلقائي نشط (كل ${carousel.autoplayIntervalMs / 1000} ثواني)`
+                  : 'التبديل التلقائي متوقف'}
+              </span>
+            </span>
+          </div>
         </div>
+
+        {/* Live Interactive Carousel Preview */}
+        {slides.length > 0 && (
+          <div className="space-y-2 bg-zinc-50/80 p-4 rounded-xl border border-zinc-200">
+            <div className="flex items-center justify-between text-xs font-bold text-zinc-700">
+              <span className="flex items-center gap-1.5">
+                <span className="text-pink-600">●</span>
+                <span>معاينة حية ومباشرة لشريط الإعلانات التلقائي:</span>
+              </span>
+              <span className="text-[11px] text-[#E6007E] font-mono">
+                {carousel.autoplayEnabled 
+                  ? `تنتقل الشرائح تلقائياً كل ${carousel.autoplayIntervalMs / 1000} ثواني` 
+                  : 'التشغيل التلقائي معطل في الإعدادات'}
+              </span>
+            </div>
+            <div className="rounded-xl overflow-hidden border border-zinc-300 shadow-xs max-h-[360px]">
+              <HeroCarousel slides={slides} settings={carousel} />
+            </div>
+            {slides.filter(s => s.isEnabled).length < 2 && (
+              <p className="text-[11px] text-amber-700 font-bold bg-amber-50 border border-amber-200 p-2 rounded-lg">
+                ⚠️ تنبيه: لتفعيل الانتقال التلقائي، يجب أن يكون هناك شريحتان نشطتان على الأقل (حالياً: {slides.filter(s => s.isEnabled).length}).
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Existing Slides List & Sorting */}
         <div className="space-y-4">
