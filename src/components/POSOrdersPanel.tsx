@@ -12,6 +12,8 @@ import { getPOSOrders, updatePOSOrderStatus } from '@/actions/pos-orders';
 import { confirmStorefrontOrder, cancelStorefrontOrder } from '@/actions/orders';
 import { createBrowserClient } from '@supabase/ssr';
 import { AdminOrderQuickActions } from './AdminOrderQuickActions';
+import { AdminOrderItemsEditor } from './AdminOrderItemsEditor';
+import { getAvailableProductsForOrderEditor } from '@/actions/products';
 import { resolvePOSItemImage } from '@/lib/order-image';
 
 export function POSOrdersPanel({
@@ -30,7 +32,17 @@ export function POSOrdersPanel({
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<string>('ALL');
+  const [availableProducts, setAvailableProducts] = useState<any[]>([]);
   const [isPending, startTransition] = useTransition();
+
+  // Load available products for instant order item editing
+  useEffect(() => {
+    getAvailableProductsForOrderEditor().then((res) => {
+      if (res.success && res.products) {
+        setAvailableProducts(res.products);
+      }
+    });
+  }, []);
 
   // Supabase client for realtime
   const supabase = createBrowserClient(
@@ -485,62 +497,18 @@ export function POSOrdersPanel({
               </div>
             </div>
 
-            {/* Product Items with Full Image Thumbnails (صور الاصناف مع اسم الاصناف) */}
-            <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-2xs space-y-3">
-              <h4 className="text-xs font-black text-zinc-500 uppercase tracking-wider flex items-center justify-between border-b pb-2">
-                <span>أصناف الطلب للتجهيز ({selectedOrder.items?.length || 0})</span>
-                <span className="text-[11px] font-bold text-zinc-400">تأكد من مطابقة الأصناف مع الباركود والصورة</span>
-              </h4>
-
-              <div className="divide-y divide-zinc-100 space-y-2">
-                {(selectedOrder.items || []).map((item: any) => {
-                  const img = resolvePOSItemImage(item);
-                  return (
-                    <div key={item.id || item.sku} className="pt-2 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-xl bg-zinc-100 overflow-hidden shrink-0 border border-zinc-200 relative flex items-center justify-center">
-                          {img ? (
-                            <img 
-                              src={img} 
-                              alt={item.name}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <Package className="w-5 h-5 text-zinc-400" />
-                          )}
-                        </div>
-                        <div>
-                          <p className="font-extrabold text-xs text-zinc-900">{item.name}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {item.size && (
-                              <span className="text-[11px] font-bold text-zinc-600 bg-zinc-100 px-2 py-0.2 rounded">
-                                الحجم/الدرجة: {item.size}
-                              </span>
-                            )}
-                            <span className="text-[11px] font-bold text-purple-700 font-mono">
-                              الكمية: × {item.quantity}
-                            </span>
-                          </div>
-                          {item.sku && (
-                            <span className="text-[10px] text-zinc-400 font-mono">
-                              SKU: {item.sku}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="text-end shrink-0">
-                        <span className="font-black text-xs text-zinc-900 font-mono">
-                          {((item.total || item.unitPrice * item.quantity) / 1000).toFixed(3)} د.أ
-                        </span>
-                        <span className="block text-[10px] text-zinc-400 font-mono">
-                          ({(item.unitPrice / 1000).toFixed(3)} د.أ / ق)
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+            {/* Product Items with Full Image Lightbox & Barcode/Camera Item Editor */}
+            <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-2xs">
+              <AdminOrderItemsEditor
+                orderId={selectedOrder.id}
+                items={selectedOrder.items || []}
+                shippingCost={selectedOrder.shippingCost || 0}
+                availableProducts={availableProducts}
+                isLocked={selectedOrder.status === 'DELIVERED' || selectedOrder.status === 'CANCELLED'}
+                onOrderUpdated={() => {
+                  fetchOrders();
+                }}
+              />
             </div>
 
             {/* Financial Summary */}

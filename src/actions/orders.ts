@@ -631,6 +631,7 @@ export async function addOrderItemToCustomerOrder(
         revalidatePath(`/ar/track/${orderId}`);
         revalidatePath(`/en/track/${orderId}`);
         revalidatePath('/pos/cashier');
+        revalidatePath('/pos/orders');
         revalidatePath('/admin/settlements');
         return { success: true };
       }
@@ -737,6 +738,7 @@ export async function removeOrderItemFromCustomerOrder(
         revalidatePath(`/ar/track/${orderId}`);
         revalidatePath(`/en/track/${orderId}`);
         revalidatePath('/pos/cashier');
+        revalidatePath('/pos/orders');
         revalidatePath('/admin/settlements');
         return { success: true };
       }

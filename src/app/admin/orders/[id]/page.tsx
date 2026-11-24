@@ -48,13 +48,15 @@ export default async function AdminOrderDetailPage({
         select: {
           id: true,
           nameAr: true,
+          nameEn: true,
+          sku: true,
           images: {
             select: { url: true, isMain: true },
             take: 2
           },
           variants: {
-            select: { id: true, size: true, price: true, imageUrl: true },
-            take: 1
+            select: { id: true, size: true, price: true, barcode: true, sku: true, imageUrl: true },
+            take: 5
           }
         },
         orderBy: { nameAr: 'asc' }

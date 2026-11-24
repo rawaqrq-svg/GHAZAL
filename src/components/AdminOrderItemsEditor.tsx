@@ -1,8 +1,15 @@
 'use client';
 
-import React, { useState, useTransition } from 'react';
-import { Plus, Trash2, RefreshCw, AlertCircle, ShoppingBag, AlertTriangle, FileEdit, Eye, Maximize2, X, Sparkles } from 'lucide-react';
+import React, { useState, useTransition, useEffect, useRef, useCallback } from 'react';
+import { 
+  Plus, Trash2, RefreshCw, AlertCircle, ShoppingBag, AlertTriangle, 
+  FileEdit, Eye, Maximize2, X, Sparkles, Camera, ScanLine, 
+  Barcode, CheckCircle2, ZoomIn, ZoomOut, RotateCcw, Search
+} from 'lucide-react';
 import { addOrderItemToCustomerOrder, removeOrderItemFromCustomerOrder } from '@/actions/orders';
+import { findProductByBarcodeOrSkuAction } from '@/actions/products';
+import { CameraBarcodeScannerModal } from '@/components/CameraBarcodeScannerModal';
+import { resolvePOSItemImage } from '@/lib/order-image';
 import { filsToDisplay } from '@/lib/money';
 
 interface Props {
@@ -11,10 +18,32 @@ interface Props {
   shippingCost: number;
   availableProducts?: any[];
   isLocked: boolean; // true if DELIVERED or CANCELLED
+  onOrderUpdated?: () => void;
 }
 
-export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableProducts = [], isLocked }: Props) {
+export function AdminOrderItemsEditor({ 
+  orderId, 
+  items, 
+  shippingCost, 
+  availableProducts = [], 
+  isLocked,
+  onOrderUpdated
+}: Props) {
   const [isPending, startTransition] = useTransition();
+
+  // Dynamic available products catalog (initial + scanned on demand)
+  const [localProducts, setLocalProducts] = useState<any[]>(availableProducts);
+
+  useEffect(() => {
+    if (availableProducts && availableProducts.length > 0) {
+      setLocalProducts((prev) => {
+        const map = new Map<string, any>();
+        prev.forEach((p) => map.set(p.id, p));
+        availableProducts.forEach((p) => map.set(p.id, p));
+        return Array.from(map.values());
+      });
+    }
+  }, [availableProducts]);
 
   // Add Item Modal State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -23,39 +52,201 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
   const [customPriceStr, setCustomPriceStr] = useState('');
   const [addReason, setAddReason] = useState('');
 
+  // Barcode Scanning State
+  const [barcodeInput, setBarcodeInput] = useState('');
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isSearchingBarcode, setIsSearchingBarcode] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const barcodeInputRef = useRef<HTMLInputElement | null>(null);
+
   // Delete Item Modal State
   const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; quantity: number; total: number } | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
 
-  // Image Lightbox Preview State
-  const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
+  // Image Lightbox Preview State with Zoom
+  const [previewImage, setPreviewImage] = useState<{ url: string; title: string; subtitle?: string } | null>(null);
+  const [zoomScale, setZoomScale] = useState(1);
 
   const [error, setError] = useState<string | null>(null);
 
-  const selectedProduct = availableProducts.find(p => p.id === selectedProductId);
+  const selectedProduct = localProducts.find((p) => p.id === selectedProductId);
+
+  // Audio beep feedback
+  const playBeep = useCallback((isSuccess = true) => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = isSuccess ? 'sine' : 'sawtooth';
+      osc.frequency.setValueAtTime(isSuccess ? 1850 : 420, ctx.currentTime);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (isSuccess ? 0.15 : 0.25));
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + (isSuccess ? 0.15 : 0.25));
+    } catch {}
+  }, []);
 
   const handleOpenAddModal = () => {
-    setSelectedProductId(availableProducts[0]?.id || '');
+    const defaultProduct = localProducts[0];
+    setSelectedProductId(defaultProduct?.id || '');
     setQuantity(1);
-    const initialPrice = availableProducts[0]?.variants?.[0]?.price || 15000;
+    const initialPrice = defaultProduct?.variants?.[0]?.price || 15000;
     setCustomPriceStr((initialPrice / 1000).toFixed(3));
     setAddReason('طلب الزبونة هاتفياً إضافة صنف للفاتورة');
+    setBarcodeInput('');
+    setScanFeedback(null);
     setError(null);
     setIsAddModalOpen(true);
+
+    // Autofocus barcode input after modal animation
+    setTimeout(() => {
+      barcodeInputRef.current?.focus();
+    }, 150);
   };
 
   const handleProductChange = (prodId: string) => {
     setSelectedProductId(prodId);
-    const p = availableProducts.find(x => x.id === prodId);
+    const p = localProducts.find((x) => x.id === prodId);
     if (p) {
       const priceFils = p.variants?.[0]?.price || 15000;
       setCustomPriceStr((priceFils / 1000).toFixed(3));
     }
   };
 
+  // Core Barcode Detection & Product Lookup (Scanner Gun + Camera)
+  const handleBarcodeDetected = useCallback(async (rawCode: string) => {
+    const cleanCode = rawCode.trim();
+    if (!cleanCode) return;
+
+    setBarcodeInput(cleanCode);
+    setIsSearchingBarcode(true);
+    setScanFeedback(null);
+    setError(null);
+
+    // 1. Search in localProducts
+    const existing = localProducts.find((p) => {
+      if (p.id === cleanCode || p.sku?.toLowerCase() === cleanCode.toLowerCase()) return true;
+      if (p.variants?.some((v: any) => v.barcode === cleanCode || v.sku?.toLowerCase() === cleanCode.toLowerCase())) return true;
+      return false;
+    });
+
+    if (existing) {
+      setSelectedProductId(existing.id);
+      const matchedVariant = existing.variants?.find((v: any) => v.barcode === cleanCode) || existing.variants?.[0];
+      const price = matchedVariant?.price || 15000;
+      setCustomPriceStr((price / 1000).toFixed(3));
+      setScanFeedback({
+        type: 'success',
+        message: `تم التعرف على الصنف: ${existing.nameAr || existing.name} (${(price / 1000).toFixed(3)} د.أ)`
+      });
+      playBeep(true);
+      setIsSearchingBarcode(false);
+      return;
+    }
+
+    // 2. Query full Database via Server Action
+    try {
+      const res = await findProductByBarcodeOrSkuAction(cleanCode);
+      if (res.success && res.product) {
+        const p = res.product as any;
+        const matchedVariant = p.variants?.find((v: any) => v.barcode === cleanCode) || p.variants?.[0];
+        const price = matchedVariant?.price || 15000;
+
+        const newProd = {
+          id: p.id,
+          nameAr: p.nameAr,
+          name: p.nameEn || p.nameAr,
+          imageUrl: p.imageUrl || null,
+          sku: p.sku,
+          variants: p.variants?.map((v: any) => ({
+            id: v.id,
+            size: v.size || v.shade || 'قياسي',
+            price: v.price,
+            barcode: v.barcode,
+            sku: v.sku,
+            imageUrl: v.imageUrl
+          })) || []
+        };
+
+        setLocalProducts((prev) => [newProd, ...prev]);
+        setSelectedProductId(newProd.id);
+        setCustomPriceStr((price / 1000).toFixed(3));
+        setScanFeedback({
+          type: 'success',
+          message: `تم العثور على الصنف من قاعدة البيانات: ${newProd.nameAr || newProd.name} (${(price / 1000).toFixed(3)} د.أ)`
+        });
+        playBeep(true);
+      } else {
+        setScanFeedback({
+          type: 'error',
+          message: `لم يتم العثور على أي منتج مسجل بالباركود: ${cleanCode}`
+        });
+        playBeep(false);
+      }
+    } catch (err: any) {
+      setScanFeedback({
+        type: 'error',
+        message: `خطأ أثناء البحث عن الباركود: ${err.message || err}`
+      });
+      playBeep(false);
+    } finally {
+      setIsSearchingBarcode(false);
+    }
+  }, [localProducts, playBeep]);
+
+  // Physical Barcode Scanner Gun Keystroke Listener
+  useEffect(() => {
+    if (!isAddModalOpen) return;
+
+    let buffer = '';
+    let lastKeyTime = Date.now();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in notes/reason textarea
+      const target = e.target as HTMLElement;
+      if (target?.tagName === 'TEXTAREA') return;
+
+      const currentTime = Date.now();
+      const timeDiff = currentTime - lastKeyTime;
+      lastKeyTime = currentTime;
+
+      if (e.key === 'Enter') {
+        if (buffer.length >= 3) {
+          e.preventDefault();
+          const scannedCode = buffer.trim();
+          buffer = '';
+          handleBarcodeDetected(scannedCode);
+        }
+        return;
+      }
+
+      // Barcode scanner guns type consecutive characters very rapidly (< 70ms)
+      if (e.key.length === 1) {
+        if (timeDiff > 90 && buffer.length > 0) {
+          buffer = e.key;
+        } else {
+          buffer += e.key;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isAddModalOpen, handleBarcodeDetected]);
+
+  // Handle Add Item to Order
   const handleAddItem = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProduct) return;
+    if (!selectedProduct) {
+      setError('يرجى اختيار منتج لإضافته');
+      return;
+    }
     const priceVal = parseFloat(customPriceStr);
     if (isNaN(priceVal) || priceVal <= 0) {
       setError('يرجى تحديد سعر صالح');
@@ -80,6 +271,7 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
 
       if (res.success) {
         setIsAddModalOpen(false);
+        onOrderUpdated?.();
       } else {
         setError(res.error || 'فشل إضافة الصنف');
       }
@@ -110,6 +302,7 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
       const res = await removeOrderItemFromCustomerOrder(orderId, itemToDelete.id, deleteReason.trim());
       if (res.success) {
         setItemToDelete(null);
+        onOrderUpdated?.();
       } else {
         setError(res.error || 'فشل حذف الصنف');
       }
@@ -123,12 +316,12 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
         <div>
           <h3 className="font-extrabold text-sm text-zinc-900 flex items-center gap-2">
             <ShoppingBag className="w-4 h-4 text-[#E6007E]" />
-            <span>الأصناف والمنتجات بالفاتورة</span>
+            <span>الأصناف والمنتجات بالفاتورة ({items.length})</span>
           </h3>
           <p className="text-xs text-zinc-500 mt-0.5">
             {isLocked
               ? 'تم قفل تعديل الفاتورة لأن الطلب أصبح مكتملاً أو ملغياً.'
-              : 'يمكنك إضافة أو حذف منتجات من الفاتورة وتسجيل سبب التعديل قبل اكتمال الطلب.'}
+              : 'يمكنك تكبير أي صورة للتأكد من الصنف، أو إضافة صنف جديد للفاتورة عبر قارئ الباركود أو الكاميرا.'}
           </p>
         </div>
 
@@ -140,25 +333,25 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#E6007E] hover:bg-[#c4006b] text-white text-xs font-bold transition shadow-xs active:scale-95 cursor-pointer shrink-0"
           >
             <Plus className="w-4 h-4" />
-            <span>إضافة منتج للفاتورة</span>
+            <span>إضافة منتج للفاتورة (باركود / كاميرا)</span>
           </button>
         )}
       </div>
 
       {error && (
-        <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-bold flex items-center gap-2">
+        <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-bold flex items-center gap-2 animate-fade-in">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
-      {/* Items List with Clear Product Images for Order Preparation & Fulfillment */}
+      {/* Items List with Clear Click-to-Zoom Product Images */}
       <div className="divide-y divide-zinc-200">
         {items.map((item) => {
           const itemName = item.name || item.product?.nameAr || 'منتج غير مسمى';
           const itemSpec = item.size || item.variant?.size || item.shade || null;
           const itemTotal = ((item.total || item.totalPrice || ((item.unitPrice || 0) * (item.quantity || 1))) || 0);
-          const itemImage = item.imageUrl || item.image || item.product?.images?.[0]?.url || item.variant?.imageUrl || null;
+          const itemImage = resolvePOSItemImage(item) || item.imageUrl || item.image || item.product?.images?.[0]?.url || item.variant?.imageUrl || null;
 
           return (
             <div 
@@ -167,9 +360,18 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
             >
               {/* Product Visual Thumbnail & Info */}
               <div className="flex items-center gap-3.5 sm:gap-4 flex-1 min-w-0">
-                {/* Image Box with Click-to-Zoom */}
+                {/* Image Box with Click-to-Zoom Lightbox */}
                 <div 
-                  onClick={() => itemImage && setPreviewImage({ url: itemImage, title: itemName })}
+                  onClick={() => {
+                    if (itemImage) {
+                      setPreviewImage({ 
+                        url: itemImage, 
+                        title: itemName,
+                        subtitle: itemSpec ? `المواصفة / الحجم: ${itemSpec}` : undefined
+                      });
+                      setZoomScale(1);
+                    }
+                  }}
                   className={`relative w-16 h-16 sm:w-20 sm:h-20 shrink-0 rounded-2xl overflow-hidden border border-zinc-200 bg-white shadow-2xs flex items-center justify-center ${
                     itemImage ? 'cursor-pointer hover:border-[#E6007E] transition' : ''
                   }`}
@@ -182,8 +384,8 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
                         alt={itemName} 
                         className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-200" 
                       />
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
-                        <Eye className="w-5 h-5 drop-shadow-md" />
+                      <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                        <Maximize2 className="w-5 h-5 drop-shadow-md" />
                       </div>
                     </>
                   ) : (
@@ -251,34 +453,109 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
         })}
       </div>
 
-      {/* Add Item Modal with Reason */}
+      {/* Add Item Modal with Barcode Scanner & Camera Support */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-zinc-200 animate-fade-in my-8">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-zinc-200 animate-fade-in my-8">
             <div className="flex items-center justify-between pb-3 border-b border-zinc-200">
               <div className="flex items-center gap-2">
-                <Plus className="w-5 h-5 text-[#E6007E]" />
-                <h3 className="font-black text-base text-zinc-900">إضافة منتج جديد لفاتورة الطلب</h3>
+                <div className="w-8 h-8 rounded-xl bg-pink-100 text-[#E6007E] flex items-center justify-center font-bold">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-zinc-900">إضافة منتج جديد لفاتورة الطلب</h3>
+                  <p className="text-[11px] text-zinc-500">امسح باركود المنتج بالكاميرا أو القارئ الضوئي لإضافته فوراً</p>
+                </div>
               </div>
               <button 
                 onClick={() => setIsAddModalOpen(false)} 
-                className="p-1 text-zinc-400 hover:text-zinc-600 cursor-pointer"
+                className="p-1.5 rounded-xl hover:bg-zinc-100 text-zinc-400 hover:text-zinc-600 cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleAddItem} className="space-y-4 pt-4 text-xs font-bold text-zinc-700">
+            {/* Quick Barcode Scanner Section */}
+            <div className="my-4 p-3.5 bg-gradient-to-r from-pink-50/70 via-purple-50/50 to-white rounded-2xl border border-pink-200/80 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-zinc-800 flex items-center gap-1.5">
+                  <Barcode className="w-4 h-4 text-[#E6007E]" />
+                  <span>قارئ الباركود السريع (جهاز المسح / الكاميرا)</span>
+                </span>
+                <span className="text-[10px] text-zinc-500 bg-white px-2 py-0.5 rounded-full border border-zinc-200 font-bold">
+                  يدعم قارئ الليزر والكاميرا
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    ref={barcodeInputRef}
+                    type="text"
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleBarcodeDetected(barcodeInput);
+                      }
+                    }}
+                    placeholder="امسح بالباركود (Scanner Gun) أو اكتب الكود..."
+                    className="w-full bg-white border border-zinc-300 focus:border-[#E6007E] rounded-xl pl-3 pr-8 py-2 text-xs font-mono font-bold outline-none transition"
+                  />
+                  <ScanLine className="w-4 h-4 text-zinc-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleBarcodeDetected(barcodeInput)}
+                  disabled={isSearchingBarcode || !barcodeInput.trim()}
+                  className="px-3 py-2 bg-zinc-900 hover:bg-black text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1 shrink-0 disabled:opacity-40"
+                  title="بحث عن الباركود"
+                >
+                  {isSearchingBarcode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                  <span>بحث</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCameraOpen(true)}
+                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl transition shadow-xs flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  title="فتح كاميرا الهاتف / الكمبيوتر لمسح الباركود"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>مسح بالكاميرا</span>
+                </button>
+              </div>
+
+              {/* Feedback messages */}
+              {scanFeedback && (
+                <div className={`p-2.5 rounded-xl text-xs font-bold flex items-center gap-2 animate-fade-in ${
+                  scanFeedback.type === 'success' 
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+                }`}>
+                  {scanFeedback.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  )}
+                  <span>{scanFeedback.message}</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleAddItem} className="space-y-4 pt-1 text-xs font-bold text-zinc-700">
               <div>
-                <label className="block mb-1">اختر المنتج المراد إضافته: *</label>
+                <label className="block mb-1 text-zinc-800 font-extrabold">أو اختر المنتج يدوياً من القائمة:</label>
                 <select
                   value={selectedProductId}
                   onChange={(e) => handleProductChange(e.target.value)}
-                  className="w-full border border-zinc-300 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-[#E6007E] bg-white cursor-pointer"
+                  className="w-full border border-zinc-300 rounded-xl px-3 py-2.5 text-xs font-bold outline-none focus:border-[#E6007E] bg-white cursor-pointer"
                 >
-                  {availableProducts.map((p) => (
+                  {localProducts.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.nameAr || p.name} — {( (p.variants?.[0]?.price || 15000) / 1000).toFixed(3)} د.أ
+                      {p.nameAr || p.name} {p.sku ? `(${p.sku})` : ''} — {(((p.variants?.[0]?.price || 15000)) / 1000).toFixed(3)} د.أ
                     </option>
                   ))}
                 </select>
@@ -286,18 +563,29 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
 
               {selectedProduct && (
                 <div className="flex items-center gap-3 p-3 bg-zinc-50 rounded-2xl border border-zinc-200">
-                  <div className="w-12 h-12 rounded-xl overflow-hidden border border-zinc-200 bg-white shrink-0 flex items-center justify-center shadow-2xs">
+                  <div className="w-14 h-14 rounded-xl overflow-hidden border border-zinc-200 bg-white shrink-0 flex items-center justify-center shadow-2xs">
                     {selectedProduct.imageUrl ? (
-                      <img src={selectedProduct.imageUrl} alt={selectedProduct.nameAr || selectedProduct.name} className="w-full h-full object-cover" />
+                      <img 
+                        src={selectedProduct.imageUrl} 
+                        alt={selectedProduct.nameAr || selectedProduct.name} 
+                        className="w-full h-full object-cover" 
+                      />
                     ) : (
-                      <ShoppingBag className="w-5 h-5 text-pink-300" />
+                      <ShoppingBag className="w-6 h-6 text-pink-300" />
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="font-extrabold text-xs text-zinc-900 truncate">{selectedProduct.nameAr || selectedProduct.name}</p>
-                    <p className="text-[11px] text-zinc-500 font-medium font-mono">
-                      السعر المقترح: {((selectedProduct.variants?.[0]?.price || 15000) / 1000).toFixed(3)} د.أ
+                    <p className="font-extrabold text-xs text-zinc-900 truncate">
+                      {selectedProduct.nameAr || selectedProduct.name}
                     </p>
+                    <p className="text-[11px] text-zinc-500 font-medium font-mono">
+                      السعر المقترح: {(((selectedProduct.variants?.[0]?.price || 15000)) / 1000).toFixed(3)} د.أ
+                    </p>
+                    {selectedProduct.variants?.[0]?.barcode && (
+                      <p className="text-[10px] text-zinc-400 font-mono">
+                        باركود: {selectedProduct.variants[0].barcode}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
@@ -333,14 +621,14 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
               <div className="space-y-1">
                 <label className="block text-zinc-900 font-extrabold flex items-center gap-1">
                   <FileEdit className="w-3.5 h-3.5 text-[#E6007E]" />
-                  <span>سبب التعديل والإضافة: * (إلزامي للتوثيق)</span>
+                  <span>سبب التعديل والإضافة: * (إلزامي للتوثيق والنزاهة)</span>
                 </label>
                 <textarea
                   rows={2}
                   required
                   value={addReason}
                   onChange={(e) => setAddReason(e.target.value)}
-                  placeholder="اكتب سبب تعديل الفاتورة وإضافة الصنف (مثال: طلب الزبونة هاتفياً إضافة درجة أحمر شفاه إضافية)"
+                  placeholder="اكتب سبب تعديل الفاتورة وإضافة الصنف (مثال: طلب الزبونة هاتفياً إضافة منتج إضافي)"
                   className="w-full border border-zinc-300 rounded-xl p-2.5 text-xs font-medium outline-none focus:border-[#E6007E] bg-zinc-50 focus:bg-white resize-none"
                 />
               </div>
@@ -359,7 +647,7 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
                   className="flex-1 py-2.5 bg-[#E6007E] hover:bg-[#c4006b] text-white font-extrabold rounded-xl transition shadow-sm flex items-center justify-center gap-2 cursor-pointer"
                 >
                   {isPending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  <span>تأكيد الإضافة وتسجيل الملاحظة</span>
+                  <span>تأكيد الإضافة وتحديث الفاتورة</span>
                 </button>
                 <button
                   type="button"
@@ -372,6 +660,19 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
             </form>
           </div>
         </div>
+      )}
+
+      {/* Camera Barcode Scanner Modal */}
+      {isCameraOpen && (
+        <CameraBarcodeScannerModal
+          isOpen={isCameraOpen}
+          onClose={() => setIsCameraOpen(false)}
+          onScan={(scannedCode) => {
+            setIsCameraOpen(false);
+            handleBarcodeDetected(scannedCode);
+          }}
+          title="مسح باركود المنتج بكاميرا الهاتف / الويب كام"
+        />
       )}
 
       {/* Delete Item Modal with Reason */}
@@ -409,7 +710,7 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
               <div className="space-y-1">
                 <label className="block text-zinc-900 font-extrabold flex items-center gap-1">
                   <FileEdit className="w-3.5 h-3.5 text-rose-600" />
-                  <span>سبب حذف الصنف والتعديل: * (إلزامي للتوثيق)</span>
+                  <span>سبب حذف الصنف والتعديل: * (إلزامي للتوثيق والنزاهة)</span>
                 </label>
                 <textarea
                   rows={2}
@@ -443,43 +744,87 @@ export function AdminOrderItemsEditor({ orderId, items, shippingCost, availableP
         </div>
       )}
 
-      {/* Fullscreen Image Preview Lightbox for Order Fulfillment Verification */}
+      {/* Fullscreen Image Preview Lightbox with Smooth Zoom Controls */}
       {previewImage && (
         <div 
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4" 
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" 
           dir="rtl"
-          onClick={() => setPreviewImage(null)}
+          onClick={() => { setPreviewImage(null); setZoomScale(1); }}
         >
           <div 
-            className="bg-white rounded-3xl max-w-md w-full p-5 shadow-2xl border border-zinc-200 animate-fade-in flex flex-col items-center space-y-3"
+            className="bg-white rounded-3xl max-w-xl w-full p-5 shadow-2xl border border-zinc-200 flex flex-col items-center space-y-3 relative"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between w-full pb-2 border-b border-zinc-100">
-              <h4 className="font-black text-sm text-zinc-900 truncate max-w-xs">{previewImage.title}</h4>
-              <button
-                type="button"
-                onClick={() => setPreviewImage(null)}
-                className="p-1.5 rounded-xl hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+            {/* Lightbox Header */}
+            <div className="flex items-center justify-between w-full pb-3 border-b border-zinc-100">
+              <div className="min-w-0 pr-1">
+                <h4 className="font-black text-sm sm:text-base text-zinc-900 truncate">
+                  {previewImage.title}
+                </h4>
+                {previewImage.subtitle && (
+                  <p className="text-xs text-zinc-500 font-bold mt-0.5">{previewImage.subtitle}</p>
+                )}
+              </div>
+
+              {/* Zoom Controls & Close */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setZoomScale((prev) => Math.min(2.5, prev + 0.3))}
+                  className="p-1.5 rounded-xl hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 transition cursor-pointer"
+                  title="تكبير الصورة (+)"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZoomScale((prev) => Math.max(1, prev - 0.3))}
+                  className="p-1.5 rounded-xl hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 transition cursor-pointer"
+                  title="تصغير الصورة (-)"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                {zoomScale > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setZoomScale(1)}
+                    className="p-1.5 rounded-xl hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 transition cursor-pointer"
+                    title="إعادة الحجم الافتراضي"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                )}
+                <div className="w-px h-4 bg-zinc-200 mx-1" />
+                <button
+                  type="button"
+                  onClick={() => { setPreviewImage(null); setZoomScale(1); }}
+                  className="p-1.5 rounded-xl hover:bg-zinc-100 text-zinc-400 hover:text-zinc-700 transition cursor-pointer"
+                  title="إغلاق (Esc)"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
-            <div className="w-full max-h-[70vh] rounded-2xl overflow-hidden bg-zinc-50 border border-zinc-200 flex items-center justify-center p-2">
+
+            {/* High-Resolution Zoomable Stage */}
+            <div className="w-full max-h-[70vh] rounded-2xl overflow-auto bg-zinc-50/80 border border-zinc-200 flex items-center justify-center p-3 select-none">
               <img 
                 src={previewImage.url} 
                 alt={previewImage.title} 
-                className="w-full h-auto max-h-[60vh] object-contain rounded-xl" 
+                style={{ transform: `scale(${zoomScale})`, transition: 'transform 0.2s ease-out' }}
+                className="w-full h-auto max-h-[60vh] object-contain rounded-xl origin-center" 
               />
             </div>
+
+            {/* Lightbox Footer */}
             <div className="flex items-center justify-between w-full text-xs text-zinc-500 font-bold pt-1">
-              <span>صورة الصنف المعتمدة لتجهيز وتغليف الطلب</span>
-              <button 
-                type="button"
-                onClick={() => setPreviewImage(null)}
-                className="text-[#E6007E] hover:underline"
-              >
-                إغلاق
-              </button>
+              <span className="flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-[#E6007E]" />
+                <span>صورة الصنف واضحة بدقة كاملة للمعاينة ومطابقة الطلب قبل التوصيل</span>
+              </span>
+              <span className="text-[11px] font-mono text-zinc-400">
+                {Math.round(zoomScale * 100)}%
+              </span>
             </div>
           </div>
         </div>

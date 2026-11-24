@@ -634,6 +634,10 @@ export async function findProductByBarcodeOrSkuAction(code: string) {
         nameEn: true,
         sku: true,
         channel: true,
+        images: {
+          select: { url: true, isMain: true },
+          take: 2
+        },
         variants: {
           select: {
             id: true,
@@ -642,14 +646,22 @@ export async function findProductByBarcodeOrSkuAction(code: string) {
             price: true,
             costPrice: true,
             size: true,
-            shade: true
+            shade: true,
+            imageUrl: true
           }
         }
       }
     });
 
     if (product) {
-      return { success: true, product };
+      const mainImage = (product as any).images?.find((img: any) => img.isMain)?.url || (product as any).images?.[0]?.url || (product as any).variants?.[0]?.imageUrl || null;
+      return { 
+        success: true, 
+        product: {
+          ...product,
+          imageUrl: mainImage
+        }
+      };
     }
 
     return { success: false, notFound: true };
@@ -658,4 +670,54 @@ export async function findProductByBarcodeOrSkuAction(code: string) {
     return { success: false, error: error.message };
   }
 }
+
+/**
+ * جلب قائمة سريعة بالمنتجات المتاحة لإضافتها لفواتير وطلبات الزبائن
+ */
+export async function getAvailableProductsForOrderEditor() {
+  try {
+    const products = await prisma.product.findMany({
+      where: { isVisible: true },
+      take: 100,
+      select: {
+        id: true,
+        nameAr: true,
+        nameEn: true,
+        sku: true,
+        images: {
+          select: { url: true, isMain: true },
+          take: 2
+        },
+        variants: {
+          select: { id: true, size: true, price: true, barcode: true, sku: true, imageUrl: true },
+          take: 5
+        }
+      },
+      orderBy: { nameAr: 'asc' }
+    });
+
+    return {
+      success: true,
+      products: products.map((p) => ({
+        id: p.id,
+        nameAr: p.nameAr,
+        name: p.nameEn || p.nameAr,
+        sku: p.sku,
+        imageUrl: (p as any).variants?.[0]?.imageUrl || (p as any).images?.find((i: any) => i.isMain)?.url || (p as any).images?.[0]?.url || null,
+        variants: p.variants.map((v) => ({
+          id: v.id,
+          size: v.size,
+          price: v.price,
+          barcode: v.barcode,
+          sku: v.sku,
+          imageUrl: v.imageUrl
+        }))
+      }))
+    };
+  } catch (err: any) {
+    console.warn('getAvailableProductsForOrderEditor error:', err);
+    return { success: false, products: [] };
+  }
+}
+
 
