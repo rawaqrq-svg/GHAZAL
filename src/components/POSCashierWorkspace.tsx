@@ -294,9 +294,28 @@ export function POSCashierWorkspace({
   // 0. Register Service Worker for seamless offline operation (PWA Cache)
   useEffect(() => {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw-pos.js').catch((err) => {
-        console.warn('POS Service Worker registration error:', err);
-      });
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (isLocalhost && process.env.NODE_ENV !== 'production') {
+        // In local development, unregister service workers and clear browser caches to prevent Turbopack chunk mismatch
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          for (const reg of registrations) {
+            reg.unregister();
+          }
+        });
+        if ('caches' in window) {
+          caches.keys().then((names) => {
+            names.forEach((name) => {
+              if (name.startsWith('ghazal-pos-cache')) {
+                caches.delete(name);
+              }
+            });
+          });
+        }
+      } else {
+        navigator.serviceWorker.register('/sw-pos.js').catch((err) => {
+          console.warn('POS Service Worker registration error:', err);
+        });
+      }
     }
   }, []);
 

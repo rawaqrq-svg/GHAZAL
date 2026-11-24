@@ -3,27 +3,27 @@
  * Keeps the POS cashier interface operational even without internet connection.
  */
 
-const CACHE_NAME = 'ghazal-pos-cache-v1';
+const CACHE_NAME = 'ghazal-pos-cache-v2';
 
-// Essential assets to cache immediately
+// Essential assets to cache for offline operation
 const PRECACHE_ASSETS = [
-  '/',
-  '/pos/cashier',
   '/manifest.json',
   '/logo.png',
   '/favicon.ico',
+  '/offline.html',
   '/apple-touch-icon.png',
   '/icon-192.png',
   '/icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(PRECACHE_ASSETS).catch((err) => {
         console.warn('Pre-cache error (non-fatal):', err);
       });
-    }).then(() => self.skipWaiting())
+    })
   );
 });
 
@@ -32,7 +32,8 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((name) => {
-          if (name !== CACHE_NAME && name.startsWith('ghazal-pos-cache')) {
+          if (name !== CACHE_NAME) {
+            console.log('[SW] Purging outdated cache:', name);
             return caches.delete(name);
           }
         })
@@ -45,12 +46,17 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
+  // In local development, bypass Service Worker entirely to prevent Turbopack chunk mismatches
+  if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.port === '3000') {
+    return;
+  }
+
   // Only handle GET requests
   if (request.method !== 'GET') {
     return;
   }
 
-  // Skip API routes, heartbeat, downloads, and Supabase calls
+  // Skip API routes, auth, heartbeat, downloads, and Supabase calls
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/auth/') ||
@@ -59,31 +65,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 1. Static Next.js assets (_next/static, images, fonts) -> Cache First with Network Revalidation
+  // 1. Static Next.js assets (_next/static, images, fonts) -> Network First with Cache Fallback
+  // NEVER use Cache-First on Next.js chunks because code changes generate new chunk hashes!
   if (
     url.pathname.startsWith('/_next/static/') ||
     url.pathname.match(/\.(png|jpg|jpeg|svg|webp|ico|woff|woff2|ttf|css|js)$/)
   ) {
     event.respondWith(
-      caches.match(request).then((cachedResponse) => {
-        if (cachedResponse) {
-          // Revalidate in background
-          fetch(request).then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              caches.open(CACHE_NAME).then((cache) => cache.put(request, networkResponse));
-            }
-          }).catch(() => {});
-          return cachedResponse;
-        }
-
-        return fetch(request).then((networkResponse) => {
+      fetch(request)
+        .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const responseClone = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
           }
           return networkResponse;
-        });
-      })
+        })
+        .catch(async () => {
+          const cachedResponse = await caches.match(request);
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          return new Response('Asset unavailable offline', { status: 503 });
+        })
     );
     return;
   }
@@ -108,6 +111,10 @@ self.addEventListener('fetch', (event) => {
           if (cashierFallback) {
             return cashierFallback;
           }
+          const offlineFallback = await caches.match('/offline.html');
+          if (offlineFallback) {
+            return offlineFallback;
+          }
           return new Response(
             `<!DOCTYPE html>
             <html dir="rtl" lang="ar">
@@ -126,9 +133,9 @@ self.addEventListener('fetch', (event) => {
             </head>
             <body>
               <div class="box">
-                <h1>غزل POS - انقطاع الاتصال</h1>
-                <p>تم حفظ جميع بيانات الكاشير والأصناف محلياً. يرجى الضغط على الزر أدناه لإعادة فتح شاشة الكاشير والمتابعة بدون توقف.</p>
-                <button onclick="window.location.reload()">إعادة فتح شاشة الكاشير</button>
+                <h1>غزل POS - وضع دون اتصال</h1>
+                <p>النظام يعمل حالياً بالوضع غير المتصل. اضغط على الزر أدناه لإعادة تحديث الشاشة.</p>
+                <button onclick="window.location.reload()">تحديث الصفحة</button>
               </div>
             </body>
             </html>`,
