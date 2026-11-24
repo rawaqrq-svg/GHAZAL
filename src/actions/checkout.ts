@@ -6,9 +6,11 @@ import crypto from 'crypto';
 import { getShippingZoneById, JORDAN_GOVERNORATES_SHIPPING_ZONES } from '@/lib/shipping-zones';
 import { getShippingZonesList } from '@/actions/shipping';
 import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
-import { recordRewardRedemptionForOrderAction } from '@/actions/rewards';
-import { saveDemoOrder, DemoOrder } from '@/lib/orders-catalog';
+import { recordRewardRedemptionForOrderAction, evaluateCartRewardsAction } from '@/actions/rewards';
+import { saveDemoOrder, getDemoOrders, DemoOrder } from '@/lib/orders-catalog';
 import { sendNewOrderNotificationEmail } from '@/lib/email';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { headers } from 'next/headers';
 
 const checkoutSchema = z.object({
   customerName: z.string().min(2, 'يرجى إدخال اسم المستلم الكامل (حرفين على الأقل)'),
@@ -24,6 +26,13 @@ const checkoutSchema = z.object({
 });
 
 export async function processCheckout(prevState: any, formData: FormData) {
+  const headersList = await headers();
+  const ipAddress = getClientIp(headersList);
+  const isAllowed = await checkRateLimit(ipAddress, 'web_checkout', 15, 15);
+  if (!isAllowed) {
+    return { error: 'تم تجاوز الحد المسموح به من الطلبات مؤقتاً. يرجى الانتظار دقيقتين والمحاولة مجدداً.' };
+  }
+
   const rawData = Object.fromEntries(formData);
   const parsed = checkoutSchema.safeParse(rawData);
   
@@ -65,33 +74,34 @@ export async function processCheckout(prevState: any, formData: FormData) {
 
   // Idempotency check: Look for matching order by unique key
   if (idempotencyKey) {
-    const existing = await prisma.order.findUnique({
-      where: { idempotencyKey },
-      include: { items: true }
-    });
+    let existing: any = null;
+    try {
+      existing = await prisma.order.findUnique({
+        where: { idempotencyKey },
+        include: { items: true }
+      });
+    } catch (e) {
+      // Prisma offline: check memory catalog
+      const demoOrders = getDemoOrders();
+      existing = demoOrders.find((o: any) => o.idempotencyKey === idempotencyKey || o.reference === idempotencyKey);
+    }
+
     if (existing) {
-      const setting = await prisma.siteSettings.findUnique({ where: { key: 'whatsapp_number' } });
-      let number = '';
-      if (setting) {
-        try {
+      let number = '962785050655';
+      try {
+        const setting = await prisma.siteSettings.findUnique({ where: { key: 'whatsapp_number' } });
+        if (setting) {
           const config = JSON.parse(setting.value);
-          number = config.number || '';
-        } catch (e) {}
-      }
-      if (!number) {
-        if (process.env.NODE_ENV === 'production') {
-          return { error: 'قناة الدفع والاتصال (واتساب) غير متوفرة حالياً، يرجى المحاولة لاحقاً' };
-        } else {
-          number = '962785050655';
+          if (config.number) number = config.number;
         }
-      }
+      } catch (e) {}
       
-      // Rebuild the exact original message from the persisted snapshots
+      // Rebuild the exact original message from the persisted snapshots (with accurate 3-decimal JOD math)
       let msg = `مرحباً غزل (GHAZAL) للمكياج والتجميل،\nأود تأكيد طلبي الجديد رقم: ${existing.reference}\n\n`;
       msg += `الاسم: ${existing.customerName}\n`;
       msg += `رقم الهاتف: ${existing.customerPhone}\n`;
       if (existing.notes && existing.notes.includes('العنوان:')) {
-        const addressLines = existing.notes.split('\n').filter(l => l.startsWith('العنوان:'));
+        const addressLines = existing.notes.split('\n').filter((l: string) => l.startsWith('العنوان:'));
         if (addressLines.length > 0) {
           msg += `${addressLines[0]}\n`;
         }
@@ -99,11 +109,15 @@ export async function processCheckout(prevState: any, formData: FormData) {
       msg += `\nتفاصيل الطلب:\n`;
       
       for (const it of (existing.items || [])) {
-        msg += `- ${it.name} (${it.size}) x${it.quantity} = ${(it.total / 100).toFixed(2)} د.أ\n`;
+        if (it.unitPrice === 0) {
+          msg += `- ${it.name} x${it.quantity} = مجاناً 0.000 د.أ 🎁\n`;
+        } else {
+          msg += `- ${it.name} (${it.size}) x${it.quantity} = ${((it.total || 0) / 1000).toFixed(3)} د.أ\n`;
+        }
       }
       
-      msg += `\nرسوم التوصيل: ${(existing.shippingCost / 100).toFixed(2)} د.أ\n`;
-      msg += `الإجمالي: ${(existing.totalAmount / 100).toFixed(2)} د.أ\n\n`;
+      msg += `\nرسوم التوصيل: ${((existing.shippingCost || 0) / 1000).toFixed(3)} د.أ\n`;
+      msg += `الإجمالي: ${((existing.totalAmount || 0) / 1000).toFixed(3)} د.أ\n\n`;
       msg += `شكراً لكم.`;
 
       const encodedMsg = encodeURIComponent(msg);
@@ -221,8 +235,7 @@ export async function processCheckout(prevState: any, formData: FormData) {
     if (zone && (zone.isEnabled ?? true)) {
       shippingCost = zone.fee;
       zoneName = zone.nameAr;
-      // Optional free shipping threshold or rewards-based free shipping
-      if ((zone.freeShippingThreshold && totalAmount >= zone.freeShippingThreshold) || (appliedRewardsData?.freeShippingApplied)) {
+      if (zone.freeShippingThreshold && totalAmount >= zone.freeShippingThreshold) {
         shippingCost = 0;
       }
     } else {
@@ -234,28 +247,36 @@ export async function processCheckout(prevState: any, formData: FormData) {
     return { error: 'يرجى تحديد منطقة التوصيل' };
   }
 
-  // Calculate reward discount if applicable
+  // Authoritative server-side evaluation of rewards to prevent client-side parameter tampering
   let rewardDiscountFils = 0;
-  if (appliedRewardsData?.discountAmountFils && appliedRewardsData.discountAmountFils > 0) {
-    rewardDiscountFils = appliedRewardsData.discountAmountFils;
+  let verifiedFreeShipping = false;
+  let verifiedGifts: any[] = [];
+
+  try {
+    const serverRewards = await evaluateCartRewardsAction({
+      subtotalFils: totalAmount,
+      shippingFeeFils: shippingCost,
+      selectedGiftId: appliedRewardsData?.selectedGiftId || appliedRewardsData?.appliedGift?.id
+    });
+
+    if (serverRewards.freeShippingApplied) {
+      verifiedFreeShipping = true;
+      shippingCost = 0;
+    }
+    if (serverRewards.discountAmountFils > 0) {
+      rewardDiscountFils = serverRewards.discountAmountFils;
+    }
+    if (serverRewards.appliedGiftsList && serverRewards.appliedGiftsList.length > 0) {
+      verifiedGifts = serverRewards.appliedGiftsList;
+    } else if (serverRewards.appliedGift) {
+      verifiedGifts = [serverRewards.appliedGift];
+    }
+  } catch (err) {
+    console.warn('Rewards evaluation fallback:', err);
   }
 
-  // Add free gifts to order items
-  if (appliedRewardsData?.appliedGiftsList && Array.isArray(appliedRewardsData.appliedGiftsList) && appliedRewardsData.appliedGiftsList.length > 0) {
-    for (const g of appliedRewardsData.appliedGiftsList) {
-      orderItemsData.push({
-        productId: g.id,
-        variantId: g.id,
-        sku: g.sku || 'GHZ-GIFT',
-        name: `🎁 [هدية مجانية] ${g.nameAr}`,
-        size: 'هدية مجانية 0.000 د.أ',
-        quantity: 1,
-        unitPrice: 0,
-        total: 0
-      });
-    }
-  } else if (appliedRewardsData?.appliedGift) {
-    const g = appliedRewardsData.appliedGift;
+  // Add verified free gifts to order items
+  for (const g of verifiedGifts) {
     orderItemsData.push({
       productId: g.id,
       variantId: g.id,
@@ -416,7 +437,7 @@ export async function processCheckout(prevState: any, formData: FormData) {
     }
   }
   
-  if (appliedRewardsData?.freeShippingApplied) {
+  if (verifiedFreeShipping) {
     message += `\nرسوم التوصيل: مجاني (مكافأة سلة غزل 🎉)\n`;
   } else {
     message += `\nرسوم التوصيل: ${(shippingCost / 1000).toFixed(3)} د.أ\n`;

@@ -1,16 +1,30 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import crypto from 'crypto';
 
 /**
  * Cron Job — تنظيف أحداث Rate Limiting المنتهية الصلاحية
- * يُنفَّذ يومياً الساعة 2 صباحاً (vercel.json: "0 2 * * *")
- * 
- * هذا يُزيل عبء تنظيف DB من كل طلب لتحسين الأداء
+ * يُنفَّذ يومياً الساعة 2 صباحاً
  */
 export async function GET(request: Request) {
-  // التحقق من صلاحية الطلب (Cron secret)
-  const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return new NextResponse('Cron secret not configured on server', { status: 500 });
+  }
+
+  const authHeader = request.headers.get('authorization') || '';
+  const expectedHeader = `Bearer ${cronSecret}`;
+
+  let isAuthorized = false;
+  try {
+    const authBuf = Buffer.from(authHeader);
+    const expBuf = Buffer.from(expectedHeader);
+    isAuthorized = authBuf.length === expBuf.length && crypto.timingSafeEqual(authBuf, expBuf);
+  } catch {
+    isAuthorized = false;
+  }
+
+  if (!isAuthorized) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
@@ -37,8 +51,6 @@ export async function GET(request: Request) {
         expiresAt: { lt: now },
       },
     });
-
-    console.log(`[Cron cleanup-ratelimits] Deleted: ${deleted.count} rate limit events, ${deletedMfa.count} MFA challenges, ${deletedSessions.count} sessions`);
 
     return NextResponse.json({
       success: true,

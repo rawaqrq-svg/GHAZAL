@@ -275,6 +275,21 @@ export function POSCashierWorkspace({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const newPosBarcodeInputRef = useRef<HTMLInputElement>(null);
   const returnQueryInputRef = useRef<HTMLInputElement>(null);
+  const lastScanRef = useRef<{ code: string; timestamp: number }>({ code: '', timestamp: 0 });
+
+  const [printingSettings, setPrintingSettings] = useState<{
+    receiptPaperWidth: '80mm' | '58mm';
+    showShopLogo: boolean;
+    receiptHeader: string;
+    receiptFooter: string;
+    showBarcodeOnReceipt: boolean;
+  }>({
+    receiptPaperWidth: '80mm',
+    showShopLogo: true,
+    receiptHeader: 'محل غزل للمكياج والعناية',
+    receiptFooter: 'شكراً لتسوقكم من محل غزل ❤️\nالبضاعة المباعة تستبدل خلال 3 أيام مع إبراز أصل الفاتورة بحالتها الأصلية.',
+    showBarcodeOnReceipt: true
+  });
 
   // 0. Register Service Worker for seamless offline operation (PWA Cache)
   useEffect(() => {
@@ -311,6 +326,12 @@ export function POSCashierWorkspace({
       const savedCashier = localStorage.getItem('ghazal_current_cashier_name');
       if (savedCashier) {
         setActiveCashierName(savedCashier);
+      }
+      const savedPrinting = localStorage.getItem('ghazal_pos_printing_settings');
+      if (savedPrinting) {
+        try {
+          setPrintingSettings(prev => ({ ...prev, ...JSON.parse(savedPrinting) }));
+        } catch (e) {}
       }
       localStorage.setItem('ghazal_pos_paired_device', 'true');
     } catch (e) {}
@@ -397,6 +418,17 @@ export function POSCashierWorkspace({
           if (res && res.success) {
             syncedCount++;
             await removeOfflineSale(item.id);
+            // Reflect authoritative server reference in local history
+            try {
+              const history = await getLocalSalesHistory();
+              const matched = history.find(h => h.id === item.id || h.reference === item.receiptData?.reference);
+              if (matched) {
+                matched.serverSynced = true;
+                matched.serverReference = res.reference;
+                matched.saleId = res.saleId;
+                await addSaleToLocalHistory(matched);
+              }
+            } catch (e) {}
           } else {
             await updateOfflineSaleStatus(item.id, 'FAILED', res?.error || 'Server error');
             remaining.push(item);
@@ -792,8 +824,21 @@ export function POSCashierWorkspace({
 
   // Direct trigger for quick code buttons (e.g. 1234 for 1 JOD items)
   const handleQuickCodeClick = (shortcut: { code: string; name: string; price: number }) => {
-    const quickVariantId = `quick-${shortcut.code}`;
-    const existingIdx = cart.findIndex(item => item.variantId === quickVariantId);
+    // 1. Look up corresponding variant from allAvailableProducts or COSMETICS_CATALOG
+    const matchedProduct = allAvailableProducts.find(p => 
+      (p as any).quickCode === shortcut.code ||
+      p.sku === `POS-${shortcut.code}-SEC` ||
+      p.variants.some(v => v.barcode === shortcut.code || v.sku === shortcut.code || v.sku.includes(shortcut.code))
+    );
+    const matchedVariant = matchedProduct?.variants.find(v => v.barcode === shortcut.code || v.sku === shortcut.code || v.sku.includes(shortcut.code)) 
+      || matchedProduct?.variants[0];
+
+    const quickVariantId = matchedVariant?.id || `quick-${shortcut.code}`;
+    const sku = matchedVariant?.sku || `POS-${shortcut.code}`;
+    const name = matchedProduct?.nameAr || shortcut.name;
+    const price = matchedVariant?.price || shortcut.price;
+
+    const existingIdx = cart.findIndex(item => item.variantId === quickVariantId || (item.sku && item.sku === sku));
     if (existingIdx > -1) {
       const updated = [...cart];
       updated[existingIdx].quantity += 1;
@@ -801,11 +846,11 @@ export function POSCashierWorkspace({
     } else {
       setCart(prev => [...prev, {
         variantId: quickVariantId,
-        sku: shortcut.code,
-        name: shortcut.name,
-        size: 'سريع',
-        shade: 'كاش',
-        price: shortcut.price,
+        sku,
+        name,
+        size: matchedVariant?.size || 'سريع',
+        shade: matchedVariant?.shade || 'كاش',
+        price,
         quantity: 1
       }]);
     }
@@ -841,8 +886,15 @@ export function POSCashierWorkspace({
 
   // Unified Barcode Scanner & Shortcode Processor (يدعم أصناف المتجر + أكواد الكاش + فواتير الاسترجاع)
   const processScannedBarcode = async (rawCode: string) => {
-    const trimmed = rawCode.trim();
+    const trimmed = rawCode.trim().replace(/[\r\n\t]/g, '');
     if (!trimmed) return;
+
+    // Laser debounce & duplicate suppression within 400ms
+    const now = Date.now();
+    if (lastScanRef.current.code === trimmed && now - lastScanRef.current.timestamp < 400) {
+      return;
+    }
+    lastScanRef.current = { code: trimmed, timestamp: now };
 
     // 1. Check if it is an Invoice/Receipt Reference for Returns (e.g. POS-XXXX or INV-XXXX)
     if (trimmed.toUpperCase().startsWith('POS-') || trimmed.toUpperCase().startsWith('INV-')) {
@@ -891,11 +943,15 @@ export function POSCashierWorkspace({
 
   // Barcode Scanner Listener: Enter key automatically processes scanned code or shortcode
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && search.trim()) {
+    if (e.key === 'Enter' || e.key === 'NumpadEnter') {
       e.preventDefault();
-      const code = search;
-      setSearch('');
-      processScannedBarcode(code);
+      e.stopPropagation();
+      const code = (searchInputRef.current?.value || search).trim();
+      if (code) {
+        setSearch('');
+        if (searchInputRef.current) searchInputRef.current.value = '';
+        processScannedBarcode(code);
+      }
     }
   };
 
@@ -1018,8 +1074,12 @@ export function POSCashierWorkspace({
       const isAddPosBarcodeInput = e.target === newPosBarcodeInputRef.current;
       const isReturnQueryInput = e.target === returnQueryInputRef.current;
 
-      if (e.key === 'Enter') {
-        const candidate = (isSearchInput ? search : scanBuffer).trim();
+      if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+        if (isSearchInput) {
+          // Already handled with stopPropagation in input's onKeyDown
+          return;
+        }
+        const candidate = scanBuffer.trim();
 
         // ROUTING RULE 1: If Add/Edit POS Product modal is open (مسح باركود للتعديل أو إضافة صنف جديد)
         if (isAddPosModalOpen) {
@@ -1090,7 +1150,7 @@ export function POSCashierWorkspace({
           isSalesHistoryOpen ||
           isSwitchCashierModalOpen ||
           isCustomerPickerOpen ||
-          (isInput && !isSearchInput)
+          isInput
         ) {
           // Do not trigger sale barcode scanning during other dialogs or typing in regular form fields
           scanBuffer = '';
@@ -1102,10 +1162,9 @@ export function POSCashierWorkspace({
           e.preventDefault();
           processScannedBarcode(candidate);
           scanBuffer = '';
-          if (isSearchInput) setSearch('');
         }
       } else if (e.key.length === 1) {
-        if (timeDiff > 70) {
+        if (timeDiff > 100) {
           scanBuffer = e.key;
         } else {
           scanBuffer += e.key;
@@ -3460,19 +3519,22 @@ export function POSCashierWorkspace({
               </button>
             </div>
 
-            {/* Visual 80mm Thermal Receipt Preview (Exact Receipt Output) */}
+            {/* Visual 80mm/58mm Thermal Receipt Preview (Exact Receipt Output) */}
             <div
               id="thermal-receipt-printable"
-              className="w-full max-w-[340px] bg-white border border-zinc-300 p-4 rounded-xl shadow-inner font-mono text-[11px] text-zinc-900 space-y-2 select-text"
+              style={{ maxWidth: printingSettings.receiptPaperWidth === '58mm' ? '260px' : '340px' }}
+              className="w-full bg-white border border-zinc-300 p-4 rounded-xl shadow-inner font-mono text-[11px] text-zinc-900 space-y-2 select-text"
             >
               {/* Receipt Header & Logo */}
               <div className="text-center space-y-1">
-                <img
-                  src="/logo.png"
-                  alt="GHAZAL Logo"
-                  className="h-10 mx-auto object-contain mb-1"
-                />
-                <h2 className="font-bold text-sm tracking-wider">محل غزل للمكياج والعناية</h2>
+                {printingSettings.showShopLogo && (
+                  <img
+                    src="/logo.png"
+                    alt="GHAZAL Logo"
+                    className="h-10 mx-auto object-contain mb-1"
+                  />
+                )}
+                <h2 className="font-bold text-sm tracking-wider">{printingSettings.receiptHeader || 'محل غزل للمكياج والعناية'}</h2>
                 <p className="text-[10px] text-zinc-600">عين الباشا - شارع القدس</p>
                 <p className="text-[10px] text-zinc-600">هاتف: <span dir="ltr">07 9999 1234</span></p>
               </div>
@@ -3591,19 +3653,21 @@ export function POSCashierWorkspace({
 
               {/* Store Policy */}
               <div className="border-t border-dashed border-zinc-300 pt-2 text-center text-[9px] text-zinc-500 space-y-0.5">
-                <p className="font-bold text-zinc-700">شكراً لتسوقكم من محل غزل ❤️</p>
-                <p>البضاعة المباعة تستبدل خلال 3 أيام مع إبراز أصل الفاتورة بحالتها الأصلية.</p>
+                <p className="font-bold text-zinc-700">{printingSettings.receiptFooter ? printingSettings.receiptFooter.split('\n')[0] : 'شكراً لتسوقكم من محل غزل ❤️'}</p>
+                <p>{printingSettings.receiptFooter && printingSettings.receiptFooter.includes('\n') ? printingSettings.receiptFooter.split('\n').slice(1).join(' ') : 'البضاعة المباعة تستبدل خلال 3 أيام مع إبراز أصل الفاتورة بحالتها الأصلية.'}</p>
               </div>
 
               {/* Scannable Invoice Barcode for Return & Exchange (Code 128) */}
-              <div className="border-t border-dashed border-zinc-400 pt-2 text-center flex flex-col items-center">
-                <BarcodeSvg 
-                  value={receiptData.reference || receiptData.invoiceNumber || 'GHAZAL-POS'} 
-                  height={54} 
-                  barHeight={36} 
-                  showText={true} 
-                />
-              </div>
+              {printingSettings.showBarcodeOnReceipt && (
+                <div className="border-t border-dashed border-zinc-400 pt-2 text-center flex flex-col items-center">
+                  <BarcodeSvg 
+                    value={receiptData.reference || receiptData.invoiceNumber || 'GHAZAL-POS'} 
+                    height={54} 
+                    barHeight={36} 
+                    showText={true} 
+                  />
+                </div>
+              )}
             </div>
 
             {/* Prompt Actions: Print (F9) vs No Receipt (Esc) */}
@@ -5878,9 +5942,18 @@ export function POSCashierWorkspace({
         </div>
       )}
 
-      {/* Global CSS for Clean 80mm ESC/POS Thermal Printing */}
+      {/* Global CSS for Clean 80mm/58mm ESC/POS Thermal Printing */}
       <style jsx global>{`
         @media print {
+          @page {
+            size: ${printingSettings.receiptPaperWidth === '58mm' ? '58mm auto' : '80mm auto'};
+            margin: 0mm !important;
+          }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
           body * {
             visibility: hidden !important;
           }
@@ -5891,12 +5964,13 @@ export function POSCashierWorkspace({
             position: absolute !important;
             left: 0 !important;
             top: 0 !important;
-            width: 78mm !important;
-            margin: 0 auto !important;
-            padding: 3mm !important;
+            width: ${printingSettings.receiptPaperWidth === '58mm' ? '56mm' : '78mm'} !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 2mm 3mm !important;
             background: #ffffff !important;
             color: #000000 !important;
-            font-family: monospace, Courier, monospace !important;
+            font-family: monospace, 'Courier New', Courier, monospace !important;
             border: none !important;
             box-shadow: none !important;
           }

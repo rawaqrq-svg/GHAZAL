@@ -134,8 +134,10 @@ export default function AdminReportsClient({ sales, expenses, vouchers, productA
   const cardSalesFils = filteredSales.filter(s => s.paymentMethod === 'CARD').reduce((acc, s) => acc + (s.total || 0), 0);
   const creditSalesFils = filteredSales.filter(s => s.paymentMethod === 'CREDIT').reduce((acc, s) => acc + (s.total || 0), 0);
 
-  const totalExpensesFils = expenses.reduce((acc, e) => acc + e.amountFils, 0);
-  const estimatedProfitFils = Math.max(0, totalSalesFils - totalExpensesFils);
+  const totalExpensesFils = expenses.reduce((acc, e) => acc + (e.amountFils || 0), 0);
+  const cogsFils = Math.round(totalSalesFils * 0.65);
+  const grossProfitFils = totalSalesFils - cogsFils;
+  const estimatedProfitFils = grossProfitFils - totalExpensesFils;
 
   // Group by cashier
   const cashierMap = new Map<string, { count: number; total: number }>();
@@ -337,14 +339,14 @@ export default function AdminReportsClient({ sales, expenses, vouchers, productA
 
         <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-xs">
           <div className="flex items-center justify-between text-zinc-500 mb-1">
-            <span className="text-xs font-bold">صافي الربح التقديري</span>
-            <TrendingUp className="w-4 h-4 text-emerald-600" />
+            <span className="text-xs font-bold">صافي الربح التشغيلي</span>
+            <TrendingUp className={`w-4 h-4 ${estimatedProfitFils >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} />
           </div>
-          <div className="text-2xl font-black text-emerald-600 font-mono" dir="ltr">
+          <div className={`text-2xl font-black font-mono ${estimatedProfitFils >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} dir="ltr">
             {(estimatedProfitFils / 1000).toFixed(3)} د.أ
           </div>
-          <span className="text-[10px] text-emerald-600 font-bold mt-1 block">
-            هامش ربح تقريبي ~{profitMarginPercent}%
+          <span className={`text-[10px] font-bold mt-1 block ${estimatedProfitFils >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {estimatedProfitFils >= 0 ? `هامش ربح تشغيلي ~${profitMarginPercent}%` : `عجز / خسارة تشغيلية ~${profitMarginPercent}%`}
           </span>
         </div>
 

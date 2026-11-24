@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/dal';
+import { getCurrentSession } from '@/lib/auth';
+import { getEmployeePermissions } from '@/lib/dal';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import path from 'path';
 import fs from 'fs';
 import sharp from 'sharp';
@@ -7,12 +9,35 @@ import sharp from 'sharp';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+const ALLOWED_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff',
+  '.mp4', '.webm', '.ogg', '.mov', '.m4v'
+]);
+
 export async function POST(req: NextRequest) {
   try {
-    try {
-      await requireAuth();
-    } catch {
+    const ip = getClientIp(req.headers);
+    const isAllowed = await checkRateLimit(ip, 'api_media_upload', 30, 10);
+    if (!isAllowed) {
+      return NextResponse.json({ success: false, error: 'تم تجاوز الحد المسموح به لرفع الملفات' }, { status: 429 });
+    }
+
+    // 1. Authenticate Session
+    const session = await getCurrentSession();
+    if (!session || !session.employee?.isActive) {
       return NextResponse.json({ success: false, error: 'غير مصرح - يرجى تسجيل الدخول أولاً' }, { status: 401 });
+    }
+
+    // 2. Authorize Permissions
+    const roleName = session.employee.role?.name?.toUpperCase() || '';
+    const isAdmin = roleName === 'ADMIN' || roleName === 'SUPER ADMIN';
+    if (!isAdmin) {
+      const perms = await getEmployeePermissions(session.employeeId);
+      if (!perms.includes('manage:products') && !perms.includes('manage:settings')) {
+        return NextResponse.json({ success: false, error: 'غير مصرح: تملك صلاحية إدارة المنتجات أو الإعدادات لرفع الوسائط' }, { status: 403 });
+      }
     }
 
     const formData = await req.formData();
@@ -21,13 +46,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'لم يتم العثور على أي ملف' }, { status: 400 });
     }
 
+    // 3. File Size Validation
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      return NextResponse.json({ 
+        success: false, 
+        error: `حجم الملف كبير جداً. الحد الأقصى المسموح هو 10 ميجابايت (الحجم الحالي: ${(file.size / (1024 * 1024)).toFixed(1)} MB)` 
+      }, { status: 400 });
+    }
+
     const ext = path.extname(file.name).toLowerCase();
-    const allowedExts = [
-      '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.svg',
-      '.mp4', '.webm', '.ogg', '.mov', '.m4v'
-    ];
-    if (!allowedExts.includes(ext)) {
-      return NextResponse.json({ success: false, error: 'صيغة الملف غير مدعومة' }, { status: 400 });
+    
+    // Disallow SVG and executables to prevent Stored XSS and remote code execution
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      return NextResponse.json({ success: false, error: 'صيغة الملف غير مدعومة لأسباب أمنية' }, { status: 400 });
     }
 
     const rawBuffer = Buffer.from(await file.arrayBuffer());
@@ -37,7 +68,7 @@ export async function POST(req: NextRequest) {
     let finalExt = ext;
 
     // Convert raster images to WebP
-    if (isImage && ext !== '.svg' && ext !== '.gif') {
+    if (isImage && ext !== '.gif') {
       try {
         finalBuffer = await sharp(rawBuffer)
           .webp({ quality: 82, effort: 4 })

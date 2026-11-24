@@ -6,6 +6,13 @@ import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
 import { revalidatePath } from 'next/cache';
 import { formatJordanDateTime } from '@/lib/date';
 import { GHAZAL_DEMO_ORDERS, getDemoOrderById } from '@/lib/orders-catalog';
+import {
+  calculateCashDrawerReconciliation,
+  calculateCourierBatchSettlement,
+  calculateProfitAndLoss,
+  filsToDisplay,
+  jodToFils
+} from '@/lib/money';
 
 // ====================================================================
 // TYPES & DATA STRUCTURES FOR SINGLE-STORE INVENTORY & SETTLEMENTS
@@ -207,9 +214,13 @@ export interface CashDrawerSettlement {
   date: string;
   shiftName: string;
   cashierName: string;
-  expectedCashFils: number; // النقد المتوقع بالصندوق (150.000)
-  countedCashFils: number; // النقد المعدود فعلياً (145.000)
-  varianceFils: number; // الفرق: -5.000 (نقص)
+  openingCashFils?: number; // رصيد بداية الوردية (العهدة الافتتاحية)
+  cashSalesFils?: number; // إجمالي مبيعات الكاش المقبوضة
+  cashRefundsFils?: number; // إجمالي المردودات النقدية
+  cashExpensesFils?: number; // إجمالي المصروفات النقدية من الصندوق
+  expectedCashFils: number; // النقد المتوقع بالصندوق = افتتاح + مبيعات - مردودات - مصروفات
+  countedCashFils: number; // النقد المعدود فعلياً
+  varianceFils: number; // الفرق: موجب (زيادة) أو سالب (عجز)
   status: 'RECONCILED' | 'VARIANCE_PENDING' | 'APPROVED';
   notes?: string;
   approvedBy?: string;
@@ -496,11 +507,15 @@ const memoryStoreState: StoreSettlementsState = (globalThis as any).__ghazal_sto
       date: '2026-11-19',
       shiftName: 'الوردية المسائية (صالة المعرض)',
       cashierName: 'محمود العمري (كاشير غزل)',
-      expectedCashFils: 150000, // 150.000 JOD
+      openingCashFils: 50000,
+      cashSalesFils: 135000,
+      cashRefundsFils: 0,
+      cashExpensesFils: 35000,
+      expectedCashFils: 150000, // 50.000 + 135.000 - 0 - 35.000 = 150.000 JOD
       countedCashFils: 145000, // 145.000 JOD
-      varianceFils: -5000, // نقص 5 دنانير
+      varianceFils: -5000, // عجز 5 دنانير
       status: 'VARIANCE_PENDING',
-      notes: 'فرق 5 دنانير تحت المراجعة - احتمال باقي متبقي لزبونة',
+      notes: 'عجز نقدي بقيمة 5.000 د.أ تحت المراجعة - احتمال باقي متبقي لزبونة',
       approvedBy: 'مدير النظام'
     },
     {
@@ -508,11 +523,15 @@ const memoryStoreState: StoreSettlementsState = (globalThis as any).__ghazal_sto
       date: '2026-11-18',
       shiftName: 'الوردية الصباحية (صالة المعرض)',
       cashierName: 'محمود العمري (كاشير غزل)',
-      expectedCashFils: 110000,
+      openingCashFils: 50000,
+      cashSalesFils: 60000,
+      cashRefundsFils: 0,
+      cashExpensesFils: 0,
+      expectedCashFils: 110000, // 50.000 + 60.000 = 110.000 JOD
       countedCashFils: 110000,
       varianceFils: 0,
       status: 'APPROVED',
-      notes: 'مطابق تماماً مع فواتير الكاشير',
+      notes: 'مطابقة ممتازة بدون أي فروقات مع فواتير الكاشير',
       approvedBy: 'مدير النظام'
     }
   ],
@@ -611,6 +630,30 @@ const memoryStoreState: StoreSettlementsState = (globalThis as any).__ghazal_sto
       date: '2026-11-01',
       recordedBy: 'مدير النظام',
       notes: 'إيجار شهر تشرين الثاني 2026'
+    },
+    {
+      id: 'exp-04',
+      expenseNumber: 'EXP-104',
+      category: 'فواتير الكهرباء',
+      amountFils: 45000, // 45 JOD
+      beneficiary: 'شركة الكهرباء الأردنية',
+      paymentMethod: 'BANK',
+      paymentStatus: 'PAID',
+      date: '2026-11-15',
+      recordedBy: 'مدير النظام',
+      notes: 'فاتورة إنارة صالة المعرض والتكييف لشهر 11'
+    },
+    {
+      id: 'exp-05',
+      expenseNumber: 'EXP-105',
+      category: 'فواتير المياه والإنترنت',
+      amountFils: 25000, // 25 JOD
+      beneficiary: 'شركة مياهنا وشركة الاتصالات',
+      paymentMethod: 'BANK',
+      paymentStatus: 'PAID',
+      date: '2026-11-16',
+      recordedBy: 'مدير النظام',
+      notes: 'فاتورة المياه واشتراك الألياف الضوئية الفايبر للمعرض'
     }
   ],
   courierCompanies: (globalThis as any).__ghazal_courier_companies || [
@@ -1099,10 +1142,10 @@ export async function getSettlementsDashboardData(channelFilter?: string) {
     operatingExpenses: memoryStoreState.operatingExpenses,
     pnlReport: {
       grossSalesFils: totalGrossSalesFils > 0 ? totalGrossSalesFils : 1000000,
-      cogsFils: cogsFils > 0 ? cogsFils : 650000,
-      grossProfitFils: grossProfitFils > 0 ? grossProfitFils : 350000,
+      cogsFils: totalGrossSalesFils > 0 ? cogsFils : 650000,
+      grossProfitFils: totalGrossSalesFils > 0 ? grossProfitFils : 350000,
       operatingExpensesFils: totalExpensesFils > 0 ? totalExpensesFils : 150000,
-      netOperatingProfitFils: netOperatingProfitFils > 0 ? netOperatingProfitFils : 200000,
+      netOperatingProfitFils: totalGrossSalesFils > 0 ? netOperatingProfitFils : 200000,
       inventoryCostValuationFils: 2450000
     }
   };
@@ -1318,18 +1361,26 @@ export async function recordDeliveryRemittancePayment(data: {
   notes?: string;
 }) {
   try {
+    if (!data.amountFils || data.amountFils <= 0 || isNaN(data.amountFils)) {
+      return { success: false, error: 'المبلغ المورد يجب أن يكون رقماً موجباً أكبر من صفر' };
+    }
+    if (!data.receiptRef || !data.receiptRef.trim()) {
+      return { success: false, error: 'يرجى إدخال رقم أو مرجع إيصال التوريد' };
+    }
+    const cleanAmountFils = Math.round(data.amountFils);
+
     const ds = memoryStoreState.deliverySettlement;
     const newRemittance = {
       id: `rem-${Date.now()}`,
-      receiptRef: data.receiptRef,
-      amountFils: data.amountFils,
+      receiptRef: data.receiptRef.trim(),
+      amountFils: cleanAmountFils,
       date: new Date().toISOString().split('T')[0],
       notes: data.notes || 'تسجيل توريد نقدي/بنكي من شركة التوصيل',
       status: 'CONFIRMED' as const
     };
 
     ds.remittances.unshift(newRemittance);
-    ds.remittedFils += data.amountFils;
+    ds.remittedFils += cleanAmountFils;
     ds.remainingFils = Math.max(0, ds.netSettlementExpectedFils - ds.remittedFils);
 
     revalidatePath('/admin/settlements');
@@ -1391,9 +1442,42 @@ export async function reconcileCashDrawerSession(data: {
   cashierName: string;
   notes?: string;
   shiftName?: string;
+  openingCashFils?: number;
+  cashSalesFils?: number;
+  cashRefundsFils?: number;
+  cashExpensesFils?: number;
+  expectedFils?: number;
 }) {
   try {
-    const expected = 150000; // 150.000 JOD standard drawer expectation
+    const openingCash = data.openingCashFils !== undefined ? Math.round(data.openingCashFils) : 50000;
+
+    const cashExpenses = data.cashExpensesFils !== undefined
+      ? Math.round(data.cashExpensesFils)
+      : memoryStoreState.operatingExpenses
+          .filter(e => e.paymentMethod === 'CASH')
+          .reduce((sum, e) => sum + (e.amountFils || 0), 0);
+
+    const cashSales = data.cashSalesFils !== undefined
+      ? Math.round(data.cashSalesFils)
+      : 155000;
+
+    const cashRefunds = data.cashRefundsFils !== undefined
+      ? Math.round(data.cashRefundsFils)
+      : 0;
+
+    // Use pure CPA reconciliation math: opening + sales - refunds - expenses
+    const recon = calculateCashDrawerReconciliation({
+      openingCashFils: openingCash,
+      cashSalesFils: cashSales,
+      cashRefundsFils: cashRefunds,
+      cashExpensesFils: cashExpenses,
+      countedCashFils: data.countedFils
+    });
+
+    const expected = data.expectedFils !== undefined
+      ? Math.round(data.expectedFils)
+      : recon.expectedClosingCashFils;
+
     const variance = data.countedFils - expected;
 
     const newEntry: CashDrawerSettlement = {
@@ -1401,11 +1485,21 @@ export async function reconcileCashDrawerSession(data: {
       date: new Date().toISOString().split('T')[0],
       shiftName: data.shiftName || 'الوردية الحالية (الكاشير)',
       cashierName: data.cashierName,
+      openingCashFils: recon.openingCashFils,
+      cashSalesFils: recon.cashSalesFils,
+      cashRefundsFils: recon.cashRefundsFils,
+      cashExpensesFils: recon.cashExpensesFils,
       expectedCashFils: expected,
       countedCashFils: data.countedFils,
       varianceFils: variance,
       status: variance === 0 ? 'APPROVED' : 'VARIANCE_PENDING',
-      notes: data.notes || (variance === 0 ? 'مطابقة ممتازة بدون فروقات' : `فرق نقدي بقيمة ${(variance / 1000).toFixed(3)} د.أ`),
+      notes: data.notes || (
+        variance === 0
+          ? 'مطابقة ممتازة بدون أي فروقات (مطابق تماماً)'
+          : variance < 0
+            ? `عجز نقدي بقيمة ${filsToDisplay(Math.abs(variance))} (نقص بالصندوق)`
+            : `فائض نقدي بقيمة ${filsToDisplay(variance)} (زيادة بالصندوق)`
+      ),
       approvedBy: 'مدير الصالة'
     };
 
@@ -1431,22 +1525,44 @@ export async function recordNewPurchaseInvoice(data: {
   notes?: string;
 }) {
   try {
-    const totalCostFils = data.items.reduce((acc, it) => acc + (it.quantity * it.unitCostFils), 0);
-    const remainingAmountFils = Math.max(0, totalCostFils - data.paidAmountFils);
+    if (!data.invoiceNumber || !data.invoiceNumber.trim()) {
+      return { success: false, error: 'يرجى إدخال رقم فاتورة الشراء' };
+    }
+    if (!data.supplierName || !data.supplierName.trim()) {
+      return { success: false, error: 'يرجى إدخال اسم المورد' };
+    }
+    if (!data.items || data.items.length === 0) {
+      return { success: false, error: 'يرجى إدراج صنف واحد على الأقل في الفاتورة' };
+    }
+
+    const items = data.items.map(it => {
+      const quantity = Math.max(1, Math.round(it.quantity || 1));
+      const unitCostFils = Math.max(0, Math.round(it.unitCostFils || 0));
+      return {
+        ...it,
+        quantity,
+        unitCostFils,
+        totalFils: quantity * unitCostFils
+      };
+    });
+
+    const totalCostFils = items.reduce((acc, it) => acc + it.totalFils, 0);
+    const paidAmountFils = Math.min(totalCostFils, Math.max(0, Math.round(data.paidAmountFils || 0)));
+    const remainingAmountFils = Math.max(0, totalCostFils - paidAmountFils);
+
+    const paymentStatus: 'PAID' | 'CREDIT' | 'PARTIAL' =
+      remainingAmountFils === 0 ? 'PAID' : (paidAmountFils > 0 ? 'PARTIAL' : 'CREDIT');
 
     const newInvoice: PurchaseInvoice = {
       id: `po-${Date.now()}`,
-      invoiceNumber: data.invoiceNumber,
-      supplierName: data.supplierName,
-      supplierPhone: data.supplierPhone,
-      items: data.items.map(it => ({
-        ...it,
-        totalFils: it.quantity * it.unitCostFils
-      })),
+      invoiceNumber: data.invoiceNumber.trim(),
+      supplierName: data.supplierName.trim(),
+      supplierPhone: data.supplierPhone?.trim(),
+      items,
       totalCostFils,
-      paymentStatus: data.paymentStatus,
+      paymentStatus,
       deliveryStatus: 'RECEIVED',
-      paidAmountFils: data.paidAmountFils,
+      paidAmountFils,
       remainingAmountFils,
       createdAt: new Date().toISOString(),
       notes: data.notes
@@ -1504,13 +1620,21 @@ export async function recordNewOperatingExpense(data: {
   recordedBy?: string;
 }) {
   try {
+    if (!data.amountFils || data.amountFils <= 0 || isNaN(data.amountFils)) {
+      return { success: false, error: 'مبلغ المصروف التشغيلي يجب أن يكون أكبر من صفر' };
+    }
+    if (!data.beneficiary || !data.beneficiary.trim()) {
+      return { success: false, error: 'يرجى تحديد الجهة المستفيدة من المصروف' };
+    }
+    const cleanAmountFils = Math.round(data.amountFils);
+
     const nextSeq = (memoryStoreState.operatingExpenses.length + 101).toString();
     const newExpense: OperatingExpense = {
       id: `exp-${Date.now()}`,
       expenseNumber: `EXP-${nextSeq}`,
       category: data.category,
-      amountFils: data.amountFils,
-      beneficiary: data.beneficiary,
+      amountFils: cleanAmountFils,
+      beneficiary: data.beneficiary.trim(),
       paymentMethod: data.paymentMethod,
       paymentStatus: 'PAID',
       date: new Date().toISOString().split('T')[0],
@@ -1578,12 +1702,16 @@ export async function recordCashierDrawerExpense(data: {
   beneficiary?: string;
 }) {
   try {
+    if (!data.amountFils || data.amountFils <= 0 || isNaN(data.amountFils)) {
+      return { success: false, error: 'مبلغ المصروف النقدي يجب أن يكون أكبر من صفر' };
+    }
+    const cleanAmount = Math.round(data.amountFils);
     const expenseNum = `CSH-EXP-${Date.now().toString().slice(-4)}`;
     const newExp: OperatingExpense = {
       id: `exp-${Date.now()}`,
       expenseNumber: expenseNum,
       category: 'صيانة ومصاريف عامة',
-      amountFils: data.amountFils,
+      amountFils: cleanAmount,
       beneficiary: data.beneficiary || 'كاشير الفرع',
       paymentMethod: 'CASH',
       paymentStatus: 'PAID',
@@ -1593,14 +1721,6 @@ export async function recordCashierDrawerExpense(data: {
     };
 
     memoryStoreState.operatingExpenses.unshift(newExp);
-    
-    // Also record in cashDrawerSettlements
-    if (memoryStoreState.cashDrawerSettlements.length > 0) {
-      memoryStoreState.cashDrawerSettlements[0].countedCashFils = Math.max(
-        0, 
-        memoryStoreState.cashDrawerSettlements[0].countedCashFils - data.amountFils
-      );
-    }
 
     revalidatePath('/admin/settlements');
     revalidatePath('/pos/cashier');
@@ -1872,11 +1992,13 @@ export async function updateCourierBatchStatusAction(data: {
           for (const bo of batch.orders) {
             bo.deliveryFeeFils = 0;
             bo.codAmountFils = 0;
+            bo.netSettlementFils = 0;
           }
         } else {
           batch.netSettlementFils = -batch.totalDeliveryFeeFils;
           for (const bo of batch.orders) {
             bo.codAmountFils = 0;
+            bo.netSettlementFils = -bo.deliveryFeeFils;
           }
         }
         break;
@@ -2005,17 +2127,24 @@ export async function cancelOrderInCourierBatchAction(data: {
 
     if (!storeBearsDeliveryCost) {
       batchOrder.deliveryFeeFils = 0; // Store does not pay delivery fee
+      batchOrder.netSettlementFils = 0;
+    } else {
+      batchOrder.netSettlementFils = -batchOrder.deliveryFeeFils;
     }
 
-    // Recalculate batch totals
-    batch.totalCodFils = batch.orders
-      .filter(o => o.status !== 'CANCELLED')
-      .reduce((sum, o) => sum + o.codAmountFils, 0);
+    // Recalculate batch totals using pure accounting function
+    const batchSettlement = calculateCourierBatchSettlement(
+      batch.orders.map(o => ({
+        codAmountFils: o.codAmountFils,
+        deliveryFeeFils: o.deliveryFeeFils,
+        status: o.status,
+        storeBearsDeliveryCost: o.status === 'CANCELLED' && o.deliveryFeeFils > 0
+      }))
+    );
 
-    batch.totalDeliveryFeeFils = batch.orders
-      .reduce((sum, o) => sum + o.deliveryFeeFils, 0);
-
-    batch.netSettlementFils = batch.totalCodFils - batch.totalDeliveryFeeFils;
+    batch.totalCodFils = batchSettlement.totalCodFils;
+    batch.totalDeliveryFeeFils = batchSettlement.totalDeliveryFeeFils;
+    batch.netSettlementFils = batchSettlement.netSettlementFils;
     batch.updatedAt = new Date().toISOString();
 
     const note = `[إلغاء طلب من إرسالية #${batch.batchNumber}] ${storeBearsDeliveryCost ? 'المتجر يتحمل تكلفة التوصيل لشركة الشحن' : 'المتجر لا يتحمل أي تكلفة توصيل (إعفاء)'}${reason ? ` — ملاحظة: ${reason}` : ''}`;
@@ -2121,6 +2250,9 @@ export async function cancelMultipleOrdersInCourierBatchAction(data: {
 
       if (!item.storeBearsDeliveryCost) {
         batchOrder.deliveryFeeFils = 0;
+        batchOrder.netSettlementFils = 0;
+      } else {
+        batchOrder.netSettlementFils = -batchOrder.deliveryFeeFils;
       }
 
       cancelledCount++;
@@ -2167,15 +2299,19 @@ export async function cancelMultipleOrdersInCourierBatchAction(data: {
       }
     }
 
-    // Recalculate batch totals
-    batch.totalCodFils = batch.orders
-      .filter(o => o.status !== 'CANCELLED')
-      .reduce((sum, o) => sum + o.codAmountFils, 0);
+    // Recalculate batch totals using pure accounting function
+    const batchSettlement = calculateCourierBatchSettlement(
+      batch.orders.map(o => ({
+        codAmountFils: o.codAmountFils,
+        deliveryFeeFils: o.deliveryFeeFils,
+        status: o.status,
+        storeBearsDeliveryCost: o.status === 'CANCELLED' && o.deliveryFeeFils > 0
+      }))
+    );
 
-    batch.totalDeliveryFeeFils = batch.orders
-      .reduce((sum, o) => sum + o.deliveryFeeFils, 0);
-
-    batch.netSettlementFils = batch.totalCodFils - batch.totalDeliveryFeeFils;
+    batch.totalCodFils = batchSettlement.totalCodFils;
+    batch.totalDeliveryFeeFils = batchSettlement.totalDeliveryFeeFils;
+    batch.netSettlementFils = batchSettlement.netSettlementFils;
     batch.updatedAt = new Date().toISOString();
 
     // If all orders in batch are now cancelled, mark batch as CANCELLED

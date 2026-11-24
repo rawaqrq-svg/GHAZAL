@@ -444,7 +444,8 @@ export async function logout() {
       redirectUrl = '/pos/login';
     }
     const { cookies } = await import('next/headers');
-    const token = (await cookies()).get('dahab_session')?.value;
+    const cookieStore = await cookies();
+    const token = cookieStore.get('ghazal_session')?.value || cookieStore.get('dahab_session')?.value;
     if (token) {
       await invalidateSession(token);
       

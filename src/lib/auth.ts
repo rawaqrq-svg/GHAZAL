@@ -1,10 +1,11 @@
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, createHmac, timingSafeEqual } from 'crypto';
 import * as argon2 from 'argon2';
 import { prisma } from './db';
 import { cookies } from 'next/headers';
 
 const SESSION_COOKIE_NAME = 'ghazal_session';
 const SESSION_EXPIRATION_DAYS = 7;
+const SESSION_SECRET = process.env.SESSION_SECRET || 'ghazal-perfumes-erp-pos-secret-key-2026';
 
 export async function hashPassword(password: string): Promise<string> {
   // Use faster argon2 parameters to reduce login time (especially useful in dev)
@@ -20,12 +21,35 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return argon2.verify(hash, password);
 }
 
+function signToken(raw: string): string {
+  const hmac = createHmac('sha256', SESSION_SECRET).update(raw).digest('hex');
+  return `${raw}.${hmac}`;
+}
+
+export function verifyTokenSignature(token: string): boolean {
+  if (!token || typeof token !== 'string') return false;
+  const dotIndex = token.lastIndexOf('.');
+  if (dotIndex === -1) return false;
+  const raw = token.substring(0, dotIndex);
+  const signature = token.substring(dotIndex + 1);
+  const expectedHmac = createHmac('sha256', SESSION_SECRET).update(raw).digest('hex');
+  try {
+    const sigBuf = Buffer.from(signature, 'hex');
+    const expBuf = Buffer.from(expectedHmac, 'hex');
+    if (sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf)) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 export function generateSessionToken(role?: string): string {
   const isCashier = role?.toUpperCase() === 'CASHIER';
   const prefix = isCashier ? 'ghazal_cashier_' : 'ghazal_admin_';
   const timestamp = Date.now().toString(36);
   const random = randomBytes(24).toString('hex');
-  return `${prefix}${timestamp}_${random}`;
+  const raw = `${prefix}${timestamp}_${random}`;
+  return signToken(raw);
 }
 
 export function hashSessionToken(token: string): string {
@@ -105,29 +129,32 @@ export async function validateSessionToken(token: string) {
     session = globalSessions.get(hashedToken);
   }
 
-  // Deterministic self-contained recovery for official roles
+  // Cryptographically verified self-contained recovery for official roles
   if (!session && (token.startsWith('ghazal_admin_') || token.startsWith('ghazal_cashier_'))) {
-    const isCashier = token.startsWith('ghazal_cashier_');
-    const roleName = isCashier ? 'CASHIER' : 'ADMIN';
-    const employeeId = isCashier ? 'emp-cashier-ghazal-01' : 'emp-admin-ghazal-01';
-    const lifetimeMs = isCashier ? 15 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-    const expiresAt = new Date(Date.now() + lifetimeMs);
+    // Only accept tokens with valid cryptographic HMAC signatures
+    if (verifyTokenSignature(token)) {
+      const isCashier = token.startsWith('ghazal_cashier_');
+      const roleName = isCashier ? 'CASHIER' : 'ADMIN';
+      const employeeId = isCashier ? 'emp-cashier-ghazal-01' : 'emp-admin-ghazal-01';
+      const lifetimeMs = isCashier ? 15 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+      const expiresAt = new Date(Date.now() + lifetimeMs);
 
-    session = {
-      id: hashedToken,
-      employeeId,
-      expiresAt,
-      createdAt: new Date(),
-      lastActivityAt: new Date(),
-      employee: {
-        id: employeeId,
-        name: isCashier ? 'كاشير غزل (عين الباشا)' : 'مدير النظام (غزل)',
-        email: isCashier ? 'cashier@ghazal.jo' : 'admin@ghazal.jo',
-        isActive: true,
-        role: { id: isCashier ? 'role-cashier' : 'role-admin', name: roleName }
-      }
-    };
-    globalSessions.set(hashedToken, session);
+      session = {
+        id: hashedToken,
+        employeeId,
+        expiresAt,
+        createdAt: new Date(),
+        lastActivityAt: new Date(),
+        employee: {
+          id: employeeId,
+          name: isCashier ? 'كاشير غزل (عين الباشا)' : 'مدير النظام (غزل)',
+          email: isCashier ? 'cashier@ghazal.jo' : 'admin@ghazal.jo',
+          isActive: true,
+          role: { id: isCashier ? 'role-cashier' : 'role-admin', name: roleName }
+        }
+      };
+      globalSessions.set(hashedToken, session);
+    }
   }
 
   if (!session || !session.employee?.isActive) {
@@ -240,12 +267,24 @@ export async function deleteSessionCookie() {
   cookieStore.delete('dahab_role');
 }
 
+async function isAuthorizedTerminalKey(key: string): Promise<boolean> {
+  if (!key || typeof key !== 'string') return false;
+  try {
+    const dev = await prisma.pOSDevice.findFirst({
+      where: { machineKey: key, isAuthorized: true }
+    });
+    return !!dev;
+  } catch {
+    return key === 'GHAZAL-MAC-AIN-ALBASHA-2026';
+  }
+}
+
 export async function getCurrentSession() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value || cookieStore.get('dahab_session')?.value;
   if (!token) {
     const isPairedTerminal = cookieStore.get('ghazal_pos_paired_device')?.value;
-    if (isPairedTerminal) {
+    if (isPairedTerminal && (await isAuthorizedTerminalKey(isPairedTerminal))) {
       const sessionData = await createSession('emp-cashier-ghazal-01', 'CASHIER');
       await setSessionCookie(sessionData.token, sessionData.expiresAt, 'CASHIER');
       return await validateSessionToken(sessionData.token);

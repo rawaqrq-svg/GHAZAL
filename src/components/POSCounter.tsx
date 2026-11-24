@@ -113,9 +113,11 @@ export function POSCounter({ products, settings }: POSCounterProps) {
   };
 
   const handleCheckout = () => {
-    if (cart.length === 0) return;
+    if (cart.length === 0 || isPending) return;
     
+    const idempotencyKey = `CNT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
     const payload = {
+      idempotencyKey,
       items: cart.map(item => ({
         variantId: item.variantId,
         sku: item.sku,
@@ -124,7 +126,7 @@ export function POSCounter({ products, settings }: POSCounterProps) {
       customerName,
       paymentMethod,
       discount: getDiscount(),
-      amountTendered: paymentMethod === 'CASH' ? (parseFloat(amountTendered) || 0) * 1000 : getGrandTotal()
+      amountTendered: paymentMethod === 'CASH' ? Math.round((parseFloat(amountTendered) || 0) * 1000) : getGrandTotal()
     };
 
     startTransition(async () => {

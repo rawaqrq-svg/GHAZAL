@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/db';
 import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
+import { requirePermission } from '@/lib/dal';
 
 export interface ProductSalesPerformanceItem {
   id: string;
@@ -31,6 +32,7 @@ export interface ProductSalesAnalyticsResult {
 }
 
 export async function getProductSalesAnalytics(): Promise<ProductSalesAnalyticsResult> {
+  await requirePermission('manage:reports');
   // 1. Gather real DB POS sales items
   const posItemCounts = new Map<string, { qty: number; revenue: number }>();
   try {

@@ -3,6 +3,10 @@ import { redirect } from 'next/navigation';
 import { prisma } from './db';
 import 'server-only';
 
+export async function checkSessionAuth() {
+  return await getCurrentSession();
+}
+
 export async function requireAuth() {
   const session = await getCurrentSession();
   
@@ -10,37 +14,73 @@ export async function requireAuth() {
     redirect('/admin/login');
   }
 
-  // Note: Absolute POS Cashier Isolation (P2-002) is enforced by Next.js middleware
-  // which blocks Cashier roles from accessing /admin/* routes entirely.
-  
   return session;
 }
+
+export async function requireAdmin() {
+  const session = await requireAuth();
+  const roleName = session.employee?.role?.name ? session.employee.role.name.toUpperCase() : '';
+  if (roleName !== 'ADMIN' && roleName !== 'SUPER ADMIN') {
+    throw new Error('Unauthorized Access: Administrator role required');
+  }
+  return session;
+}
+
+export async function requireSuperAdmin() {
+  const session = await requireAuth();
+  const roleName = session.employee?.role?.name ? session.employee.role.name.toUpperCase() : '';
+  if (roleName !== 'ADMIN' && roleName !== 'SUPER ADMIN') {
+    throw new Error('Unauthorized Access: Super Admin required');
+  }
+  return session;
+}
+
+const SENSITIVE_OPERATIONS = new Set([
+  'pos:refund',
+  'pos:price_override',
+  'pos:delete',
+  'pos:manage_devices',
+  'pos:settle_debt',
+  'pos:void_sale',
+  'manage:products',
+  'manage:reports',
+  'manage:settings',
+  'manage:employees',
+  'manage:finance'
+]);
 
 export async function requirePermission(action: string) {
   const session = await requireAuth();
   
   // Enforce strict role-based permissions
-  const roleName = session.employee.role.name.toUpperCase();
+  const roleName = session.employee?.role?.name ? session.employee.role.name.toUpperCase() : '';
 
-  if (roleName === 'ADMIN') {
+  if (roleName === 'ADMIN' || roleName === 'SUPER ADMIN') {
     return session;
   }
 
-  if (roleName === 'CASHIER' && action.startsWith('pos:')) {
+  // Cashier role has access to general POS operations, but NOT sensitive operations without explicit permission
+  if (roleName === 'CASHIER') {
+    if (SENSITIVE_OPERATIONS.has(action)) {
+      const explicitPermissions = await getEmployeePermissions(session.employeeId);
+      if (explicitPermissions.includes(action)) {
+        return session;
+      }
+      throw new Error(`Unauthorized: Operation [${action}] requires administrator or supervisor authorization.`);
+    }
+
+    if (action.startsWith('pos:')) {
+      return session;
+    }
+  }
+
+  // Check DB-assigned permissions
+  const permissions = await getEmployeePermissions(session.employeeId);
+  if (permissions.includes(action)) {
     return session;
   }
 
-  throw new Error(`Unauthorized Access: ${roleName} does not have permission for ${action}`);
-}
-
-export async function requireSuperAdmin() {
-  const session = await requireAuth();
-  
-  if (session.employee.role.name !== 'Admin' && session.employee.role.name !== 'Super Admin') {
-    throw new Error('Unauthorized Access: Super Admin required');
-  }
-  
-  return session;
+  throw new Error(`Unauthorized Access: ${roleName || 'User'} does not have permission for [${action}]`);
 }
 
 export async function getEmployeePermissions(employeeId: string): Promise<string[]> {

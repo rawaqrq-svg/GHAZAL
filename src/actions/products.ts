@@ -24,6 +24,7 @@ export async function getProductCustomBadges(): Promise<Record<string, string>> 
 }
 
 export async function setProductCustomBadge(productIdOrSlug: string, badge: string | null) {
+  await requirePermission('manage:products');
   const cleanBadge = badge?.trim() || '';
   if (cleanBadge) {
     inMemoryProductBadges[productIdOrSlug] = cleanBadge;

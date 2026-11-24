@@ -23,6 +23,7 @@ export default function CheckoutPage({ params }: { params: Promise<{ locale: str
   const cooldownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [rewardResult, setRewardResult] = useState<RewardEvaluationResult | null>(null);
   const [selectedGiftId, setSelectedGiftId] = useState<string>('');
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(() => `CHK-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`);
 
   useEffect(() => {
     const saved = localStorage.getItem('ghazal_cart') || localStorage.getItem('dahab_cart');
@@ -249,6 +250,7 @@ export default function CheckoutPage({ params }: { params: Promise<{ locale: str
               </div>
 
               {/* Hidden payload inputs */}
+              <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
               <input type="hidden" name="items" value={JSON.stringify(cartItems)} />
               <input type="hidden" name="appliedRewards" value={JSON.stringify(rewardResult || {})} />
             </div>

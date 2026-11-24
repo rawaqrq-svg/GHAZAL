@@ -43,7 +43,8 @@ export default async function proxy(request: NextRequest) {
     return redirectWithCookies(new URL('/admin/login', request.url));
   }
 
-  if (isPosRoute && !sessionToken) {
+  const isPairedTerminal = request.cookies.get('ghazal_pos_paired_device')?.value;
+  if (isPosRoute && !sessionToken && !isPairedTerminal) {
     return redirectWithCookies(new URL('/pos/login', request.url));
   }
 
@@ -57,7 +58,12 @@ export default async function proxy(request: NextRequest) {
       pathname.endsWith('.exe') ||
       pathname.includes('.')
     ) {
-      return finalResponse;
+      finalResponse.headers.set('X-Frame-Options', 'SAMEORIGIN');
+  finalResponse.headers.set('X-Content-Type-Options', 'nosniff');
+  finalResponse.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  finalResponse.headers.set('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+
+  return finalResponse;
     }
 
     if (pathname === '/') {
@@ -74,6 +80,11 @@ export default async function proxy(request: NextRequest) {
       return redirectWithCookies(url);
     }
   }
+
+  finalResponse.headers.set('X-Frame-Options', 'SAMEORIGIN');
+  finalResponse.headers.set('X-Content-Type-Options', 'nosniff');
+  finalResponse.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  finalResponse.headers.set('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
 
   return finalResponse;
 }

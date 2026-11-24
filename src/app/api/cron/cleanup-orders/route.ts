@@ -1,30 +1,47 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import crypto from 'crypto';
 
 export async function GET(request: Request) {
-  // Check authorization - you can secure this with a secret header (e.g. Vercel Cron Secret)
-  const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && process.env.NODE_ENV === 'production') {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return new NextResponse('Cron secret not configured on server', { status: 500 });
+  }
+
+  const authHeader = request.headers.get('authorization') || '';
+  const expectedHeader = `Bearer ${cronSecret}`;
+
+  let isAuthorized = false;
+  try {
+    const authBuf = Buffer.from(authHeader);
+    const expBuf = Buffer.from(expectedHeader);
+    isAuthorized = authBuf.length === expBuf.length && crypto.timingSafeEqual(authBuf, expBuf);
+  } catch {
+    isAuthorized = false;
+  }
+
+  if (!isAuthorized) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
   try {
-    const oneMonthAgo = new Date();
-    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+    // Only clean up CANCELLED orders older than 6 months to preserve financial audit trail
+    // DELIVERED orders are strictly retained for VAT and accounting compliance
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-    // Find and delete orders older than 1 month that are 'DELIVERED'
     const deletedOrders = await prisma.order.deleteMany({
       where: {
-        status: 'DELIVERED',
+        status: 'CANCELLED',
         updatedAt: {
-          lt: oneMonthAgo
+          lt: sixMonthsAgo
         }
       }
     });
 
     return NextResponse.json({
       success: true,
-      message: `Cleaned up ${deletedOrders.count} old completed orders.`,
+      message: `Cleaned up ${deletedOrders.count} old cancelled orders. Financial sales records are strictly preserved.`,
       deletedCount: deletedOrders.count,
     });
   } catch (error: any) {

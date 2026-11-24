@@ -102,6 +102,26 @@ export async function checkRateLimit(key: string, route: string, maxAttempts: nu
 }
 
 /**
+ * Safely extracts client IP address from Request, NextRequest, or Headers
+ */
+export function getClientIp(headersLike?: any): string {
+  try {
+    if (!headersLike) return '127.0.0.1';
+    const getHeader = typeof headersLike.get === 'function' 
+      ? (name: string) => headersLike.get(name) 
+      : (name: string) => headersLike[name];
+    
+    const forwarded = getHeader('x-forwarded-for');
+    if (forwarded) {
+      return forwarded.split(',')[0].trim();
+    }
+    const realIp = getHeader('x-real-ip');
+    if (realIp) return realIp.trim();
+  } catch {}
+  return '127.0.0.1';
+}
+
+/**
  * Gets the current failed attempt count and lock status for an account (email).
  */
 export async function checkAccountLockout(email: string): Promise<{

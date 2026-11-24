@@ -52,6 +52,7 @@ const resilientEmployees: ResilientEmployee[] = (globalThis as any).__ghazal_res
 (globalThis as any).__ghazal_resilient_employees = resilientEmployees;
 
 export async function getAllEmployees() {
+  await requirePermission('manage:employees');
   try {
     const list = await prisma.employee.findMany({
       include: {
@@ -228,6 +229,7 @@ export async function createEmployee(data: {
   selectedPermissionIds?: string[];
   bootstrapAdminId?: string;
 }) {
+  await requireSuperAdmin();
   try {
     const password = data.password || data.pin || '1234';
     const pin = data.pin || '1234';
@@ -312,6 +314,7 @@ export async function updateEmployee(data: {
   selectedPermissionIds?: string[];
   adminId?: string;
 }) {
+  await requireSuperAdmin();
   try {
     const roleName = data.roleId === 'role-admin' ? 'Admin' : 'Cashier';
     const empIdx = resilientEmployees.findIndex(e => e.id === data.id);
@@ -358,6 +361,7 @@ export async function updateEmployee(data: {
 }
 
 export async function toggleEmployeeStatus(employeeId: string, adminId?: string) {
+  await requireSuperAdmin();
   try {
     const empIdx = resilientEmployees.findIndex(e => e.id === employeeId);
     let newStatus = true;
@@ -388,6 +392,7 @@ export async function toggleEmployeeStatus(employeeId: string, adminId?: string)
 }
 
 export async function deleteEmployee(employeeId: string, adminId?: string) {
+  await requireSuperAdmin();
   try {
     const empIdx = resilientEmployees.findIndex(e => e.id === employeeId);
     if (empIdx > -1) {
@@ -419,6 +424,7 @@ export async function addEmployeePermissionOverride(data: {
   expiresInMinutes?: number;
   adminId: string;
 }) {
+  await requireSuperAdmin();
   try {
     const expiresAt = data.expiresInMinutes
       ? new Date(Date.now() + data.expiresInMinutes * 60 * 1000)
@@ -456,6 +462,7 @@ export async function addEmployeePermissionOverride(data: {
 }
 
 export async function forcePasswordChange(employeeId: string, adminId: string) {
+  await requireSuperAdmin();
   try {
     try {
       await prisma.employee.update({
@@ -470,6 +477,7 @@ export async function forcePasswordChange(employeeId: string, adminId: string) {
 }
 
 export async function getEmployeeSessions(employeeId: string) {
+  await requirePermission('manage:employees');
   try {
     return await prisma.session.findMany({
       where: { employeeId },
@@ -481,6 +489,7 @@ export async function getEmployeeSessions(employeeId: string) {
 }
 
 export async function revokeEmployeeSession(sessionId: string, adminId: string) {
+  await requireSuperAdmin();
   try {
     try {
       await prisma.session.delete({
@@ -494,6 +503,7 @@ export async function revokeEmployeeSession(sessionId: string, adminId: string) 
 }
 
 export async function revokeAllEmployeeSessions(employeeId: string, adminId: string) {
+  await requireSuperAdmin();
   try {
     try {
       await prisma.session.deleteMany({

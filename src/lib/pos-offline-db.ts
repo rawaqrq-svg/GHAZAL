@@ -283,6 +283,22 @@ export async function updateOfflineSaleStatus(
   status: 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED',
   lastError?: string
 ): Promise<void> {
+  // 1. Sync to localStorage queue backup
+  try {
+    if (typeof window !== 'undefined') {
+      const queue = JSON.parse(localStorage.getItem('ghazal_pos_offline_queue') || '[]');
+      const item = queue.find((q: any) => q.id === id);
+      if (item) {
+        item.syncStatus = status;
+        if (status === 'FAILED') {
+          item.retryCount = (item.retryCount || 0) + 1;
+          item.lastError = lastError;
+        }
+        localStorage.setItem('ghazal_pos_offline_queue', JSON.stringify(queue));
+      }
+    }
+  } catch (e) {}
+
   const db = await getPOSDatabase();
   if (!db) return;
 

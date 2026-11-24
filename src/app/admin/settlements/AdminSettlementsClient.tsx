@@ -150,7 +150,32 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
   const [searchProductQuery, setSearchProductQuery] = useState('');
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
   const [settlingOrderId, setSettlingOrderId] = useState<string | null>(null);
-  const [drawerCountedInput, setDrawerCountedInput] = useState<number>(150.00);
+
+  // Exact CPA Cash Drawer Reconciliation Variables (Opening + Sales - Refunds - Expenses)
+  const drawerOpeningCashFils = 50000; // 50.000 JOD standard float
+  const drawerCashSalesFils = useMemo(() => {
+    return data.cashSales
+      .filter(s => (s.paymentMethod?.includes('نقد') || s.paymentMethod === 'CASH') && !s.isRefunded && s.status !== 'REFUNDED')
+      .reduce((acc, s) => acc + (s.totalFils || 0), 0);
+  }, [data.cashSales]);
+
+  const drawerCashRefundsFils = useMemo(() => {
+    return data.cashSales
+      .filter(s => s.isRefunded || s.status === 'REFUNDED')
+      .reduce((acc, s) => acc + ((s as any).refundAmountFils || s.totalFils || 0), 0);
+  }, [data.cashSales]);
+
+  const drawerCashExpensesFils = useMemo(() => {
+    return data.cashExpenses.reduce((acc, e) => acc + (e.amountFils || 0), 0);
+  }, [data.cashExpenses]);
+
+  const drawerExpectedClosingCashFils = useMemo(() => {
+    return drawerOpeningCashFils + drawerCashSalesFils - drawerCashRefundsFils - drawerCashExpensesFils;
+  }, [drawerOpeningCashFils, drawerCashSalesFils, drawerCashRefundsFils, drawerCashExpensesFils]);
+
+  const [drawerCountedInput, setDrawerCountedInput] = useState<number>(
+    () => drawerExpectedClosingCashFils / 1000
+  );
 
   // ----------------------------------------------------------------------
   // SECTION 1 FILTERS: مبيعات الكاش وصندوق المعرض (?q=cash-sales)
@@ -1426,10 +1451,23 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                     العمليات التي تمت داخل صالة العرض والموثقة بنظام الكاشير
                   </p>
                 </div>
-                <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5">
-                  <span>إجمالي المبيعات المعروضة:</span>
-                  <span className="font-mono font-black" dir="ltr">{formatMoney(totalFilteredCashSalesFils)} د.أ</span>
-                  <span className="text-[10px] text-emerald-600 font-mono">({filteredCashSales.length} إيصال)</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerCountedInput(Number((drawerExpectedClosingCashFils / 1000).toFixed(3)));
+                      setIsCashDrawerModalOpen(true);
+                    }}
+                    className="bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition shadow-xs cursor-pointer active:scale-95"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>مطابقة صندوق الكاشير وإغلاق اليومية</span>
+                  </button>
+                  <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5">
+                    <span>إجمالي المبيعات المعروضة:</span>
+                    <span className="font-mono font-black" dir="ltr">{formatMoney(totalFilteredCashSalesFils)} د.أ</span>
+                    <span className="text-[10px] text-emerald-600 font-mono">({filteredCashSales.length} إيصال)</span>
+                  </div>
                 </div>
               </div>
 
@@ -2487,28 +2525,32 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
             {(() => {
               const rentTotal = operatingExpensesList
                 .filter(e => e.category === 'إيجار المحل' || e.category === 'إيجار المعرض' || e.beneficiary?.includes('إيجار'))
-                .reduce((acc, e) => acc + (e.amountFils || 0), 0) || 250000;
+                .reduce((acc, e) => acc + (e.amountFils || 0), 0);
               const elecTotal = operatingExpensesList
-                .filter(e => e.category === 'فواتير الكهرباء' || e.beneficiary?.includes('كهرباء'))
-                .reduce((acc, e) => acc + (e.amountFils || 0), 0) || 45000;
+                .filter(e => e.category === 'فواتير الكهرباء' || e.category === 'كهرباء وإنارة' || e.beneficiary?.includes('كهرباء'))
+                .reduce((acc, e) => acc + (e.amountFils || 0), 0);
               const billsTotal = operatingExpensesList
                 .filter(e => e.category === 'فواتير المياه والإنترنت' || e.category === 'استضافة وبرمجيات' || e.beneficiary?.includes('مياه') || e.beneficiary?.includes('إنترنت') || e.beneficiary?.includes('فاتورة'))
-                .reduce((acc, e) => acc + (e.amountFils || 0), 0) || 25000;
+                .reduce((acc, e) => acc + (e.amountFils || 0), 0);
               const otherTotal = operatingExpensesList
                 .filter(e => 
                   e.category !== 'إيجار المحل' && 
                   e.category !== 'إيجار المعرض' && 
                   !e.beneficiary?.includes('إيجار') &&
                   e.category !== 'فواتير الكهرباء' && 
+                  e.category !== 'كهرباء وإنارة' &&
                   !e.beneficiary?.includes('كهرباء') &&
                   e.category !== 'فواتير المياه والإنترنت' &&
+                  e.category !== 'استضافة وبرمجيات' &&
                   !e.beneficiary?.includes('مياه') &&
                   !e.beneficiary?.includes('إنترنت') &&
                   !e.beneficiary?.includes('فاتورة')
                 )
                 .reduce((acc, e) => acc + (e.amountFils || 0), 0);
-              const cashDrawerTotal = totalFilteredCashExpensesFils || 55000;
-              const grandTotalExpenses = rentTotal + elecTotal + billsTotal + otherTotal + cashDrawerTotal;
+              const cashDrawerTotal = operatingExpensesList
+                .filter(e => e.paymentMethod === 'CASH')
+                .reduce((acc, e) => acc + (e.amountFils || 0), 0);
+              const grandTotalExpenses = rentTotal + elecTotal + billsTotal + otherTotal;
 
               return (
                 <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-3 print:grid-cols-3">
@@ -3140,15 +3182,15 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
           // Dedicated Operating Expenses (إيجار المحل، الكهرباء، الفواتير، ومصروفات الكاش والتوصيل)
           const rentExpensesFils = operatingExpensesList
             .filter(e => e.category === 'إيجار المحل' || e.category === 'إيجار المعرض' || e.beneficiary?.includes('إيجار'))
-            .reduce((acc, e) => acc + (e.amountFils || 0), 0) || 250000;
+            .reduce((acc, e) => acc + (e.amountFils || 0), 0);
 
           const electricityExpensesFils = operatingExpensesList
-            .filter(e => e.category === 'فواتير الكهرباء' || e.beneficiary?.includes('كهرباء'))
-            .reduce((acc, e) => acc + (e.amountFils || 0), 0) || 45000;
+            .filter(e => e.category === 'فواتير الكهرباء' || e.category === 'كهرباء وإنارة' || e.beneficiary?.includes('كهرباء'))
+            .reduce((acc, e) => acc + (e.amountFils || 0), 0);
 
           const billsExpensesFils = operatingExpensesList
             .filter(e => e.category === 'فواتير المياه والإنترنت' || e.category === 'استضافة وبرمجيات' || e.beneficiary?.includes('مياه') || e.beneficiary?.includes('إنترنت') || e.beneficiary?.includes('فاتورة'))
-            .reduce((acc, e) => acc + (e.amountFils || 0), 0) || 25000;
+            .reduce((acc, e) => acc + (e.amountFils || 0), 0);
 
           const otherOpexFils = operatingExpensesList
             .filter(e => 
@@ -3156,22 +3198,23 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
               e.category !== 'إيجار المعرض' && 
               !e.beneficiary?.includes('إيجار') &&
               e.category !== 'فواتير الكهرباء' && 
+              e.category !== 'كهرباء وإنارة' &&
               !e.beneficiary?.includes('كهرباء') &&
               e.category !== 'فواتير المياه والإنترنت' &&
+              e.category !== 'استضافة وبرمجيات' &&
               !e.beneficiary?.includes('مياه') &&
               !e.beneficiary?.includes('إنترنت') &&
               !e.beneficiary?.includes('فاتورة')
             )
             .reduce((acc, e) => acc + (e.amountFils || 0), 0);
 
-          const cashExpensesFils = data.kpis.cashExpensesTotalFils || 55000;
           const deliveryFeesFils = isPosOnly ? 0 : (filteredBatchTotals.fees || data.deliverySettlement.deliveryFeesDeductibleFils || 12000);
 
           // Scaled for the period
           const effectiveRentFils = Math.round(rentExpensesFils * periodFactor);
           const effectiveElecFils = Math.round(electricityExpensesFils * periodFactor);
           const effectiveBillsFils = Math.round(billsExpensesFils * periodFactor);
-          const effectiveOtherOpexFils = Math.round((otherOpexFils + cashExpensesFils) * periodFactor);
+          const effectiveOtherOpexFils = Math.round(otherOpexFils * periodFactor);
           const effectiveDeliveryFeesFils = Math.round(deliveryFeesFils * periodFactor);
 
           // Total OPEX to deduct from Gross Profit
@@ -3931,9 +3974,54 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
       {/* MODAL 2: CASH DRAWER RECONCILIATION */}
       {isCashDrawerModalOpen && (
         <div className="print:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <h3 className="font-black text-base text-slate-900">مطابقة صندوق الكاشير وإغلاق اليومية</h3>
-            <p className="text-xs text-slate-500">عد النقد الفعلي بصندوق صالة المعرض ومطابقته مع المبيعات</p>
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="p-2 bg-emerald-100 text-emerald-800 rounded-xl">
+                  <CheckCircle2 className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="font-black text-base text-slate-900">مطابقة صندوق الكاشير وإغلاق اليومية</h3>
+                  <p className="text-xs text-slate-500">الجرد المحاسبي الدقيق للنقد الفعلي بصندوق صالة المعرض</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCashDrawerModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 font-black p-1 rounded-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* CPA Equation Breakdown: Opening Cash + Sales - Refunds - Expenses = Expected Closing Cash */}
+            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-xs space-y-2">
+              <span className="font-black text-slate-800 block text-[11px]">
+                المعادلة المحاسبية المعتمدة للرصيد الدفتري (CPA Cash Reconciliation):
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                <div className="bg-white p-2 rounded-xl border border-slate-200">
+                  <span className="text-[10px] text-slate-500 font-bold block">العهدة الافتتاحية</span>
+                  <span className="font-mono font-black text-slate-800">{formatMoney(drawerOpeningCashFils)} د.أ</span>
+                </div>
+                <div className="bg-white p-2 rounded-xl border border-emerald-200 text-emerald-800">
+                  <span className="text-[10px] font-bold block">(+) مبيعات الكاش</span>
+                  <span className="font-mono font-black">+{formatMoney(drawerCashSalesFils)} د.أ</span>
+                </div>
+                <div className="bg-white p-2 rounded-xl border border-rose-200 text-rose-800">
+                  <span className="text-[10px] font-bold block">(-) مردودات نقدية</span>
+                  <span className="font-mono font-black">-{formatMoney(drawerCashRefundsFils)} د.أ</span>
+                </div>
+                <div className="bg-white p-2 rounded-xl border border-amber-200 text-amber-800">
+                  <span className="text-[10px] font-bold block">(-) مصاريف الصندوق</span>
+                  <span className="font-mono font-black">-{formatMoney(drawerCashExpensesFils)} د.أ</span>
+                </div>
+              </div>
+              <div className="pt-2 border-t border-slate-200 flex justify-between items-center px-1 font-bold">
+                <span className="text-slate-700">(=) الرصيد الختامي المتوقع بالصندوق:</span>
+                <span className="font-mono font-black text-slate-900 text-sm">{formatMoney(drawerExpectedClosingCashFils)} د.أ</span>
+              </div>
+            </div>
 
             <form
               onSubmit={async (e) => {
@@ -3946,12 +4034,17 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                 const res = await reconcileCashDrawerSession({
                   countedFils: Math.round(counted * 1000),
                   cashierName: cashier,
-                  notes
+                  notes,
+                  openingCashFils: drawerOpeningCashFils,
+                  cashSalesFils: drawerCashSalesFils,
+                  cashRefundsFils: drawerCashRefundsFils,
+                  cashExpensesFils: drawerCashExpensesFils,
+                  expectedFils: drawerExpectedClosingCashFils
                 });
 
                 if (res.success) {
                   setIsCashDrawerModalOpen(false);
-                  showToast('تم تسجيل مطابقة الصندوق بنجاح!');
+                  showToast('تم تسجيل واعتماد مطابقة الصندوق بنجاح!');
                 }
               }}
               className="space-y-3 text-xs"
@@ -3970,11 +4063,13 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
               <div>
                 <div className="flex justify-between items-center mb-1">
                   <label className="block font-bold text-slate-700">النقد المعدود فعلياً بالصندوق (د.أ):</label>
-                  <span className="text-[11px] text-slate-500 font-bold">المتوقع في النظام: 150.00 د.أ</span>
+                  <span className="text-[11px] text-slate-500 font-bold">
+                    المتوقع: {formatMoney(drawerExpectedClosingCashFils)} د.أ
+                  </span>
                 </div>
                 <input
                   type="number"
-                  step="0.01"
+                  step="0.001"
                   name="counted"
                   required
                   value={drawerCountedInput}
@@ -3982,24 +4077,34 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                   className="w-full border border-slate-200 rounded-xl p-2.5 outline-none font-mono font-bold text-base text-slate-900"
                 />
 
-                <div className="mt-2 p-2 rounded-xl text-xs font-bold flex items-center justify-between border">
+                <div className="mt-2 p-2.5 rounded-xl text-xs font-bold flex items-center justify-between border">
                   <span>تحديد حالة الفارق:</span>
-                  {Number((drawerCountedInput - 150.00).toFixed(2)) === 0 ? (
-                    <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200 flex items-center gap-1 font-black">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      مطابق تماماً (0.00 د.أ) ✓
-                    </span>
-                  ) : Number((drawerCountedInput - 150.00).toFixed(2)) < 0 ? (
-                    <span className="text-rose-700 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200 flex items-center gap-1 font-black">
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      عجز (نقص نقدي): {(150.00 - drawerCountedInput).toFixed(2)}- د.أ
-                    </span>
-                  ) : (
-                    <span className="text-blue-700 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-200 flex items-center gap-1 font-black">
-                      <TrendingUp className="w-3.5 h-3.5" />
-                      زيادة (فائض نقدي): +{(drawerCountedInput - 150.00).toFixed(2)} د.أ
-                    </span>
-                  )}
+                  {(() => {
+                    const countedFils = Math.round(drawerCountedInput * 1000);
+                    const diffFils = countedFils - drawerExpectedClosingCashFils;
+                    if (diffFils === 0) {
+                      return (
+                        <span className="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1 font-black">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          مطابق تماماً (0.000 د.أ) ✓
+                        </span>
+                      );
+                    }
+                    if (diffFils < 0) {
+                      return (
+                        <span className="text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 flex items-center gap-1 font-black">
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          عجز (نقص نقدي): -{formatMoney(Math.abs(diffFils))} د.أ
+                        </span>
+                      );
+                    }
+                    return (
+                      <span className="text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 flex items-center gap-1 font-black">
+                        <TrendingUp className="w-3.5 h-3.5" />
+                        زيادة (فائض نقدي): +{formatMoney(diffFils)} د.أ
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -4017,13 +4122,13 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
                 <button
                   type="button"
                   onClick={() => setIsCashDrawerModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold"
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold cursor-pointer"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800"
+                  className="px-5 py-2 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 cursor-pointer"
                 >
                   اعتماد المطابقة
                 </button>

@@ -2,6 +2,10 @@
 
 import { prisma } from '@/lib/db';
 import { revalidatePath } from 'next/cache';
+import { requirePermission } from '@/lib/dal';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { headers } from 'next/headers';
+import crypto from 'crypto';
 
 export interface DeviceInfo {
   id: string;
@@ -64,6 +68,7 @@ export async function getPOSDeviceStatus(): Promise<{ device: DeviceInfo; pairin
 }
 
 export async function generateNewPairingCode(): Promise<{ success: boolean; code: string }> {
+  await requirePermission('manage:settings');
   const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   const digits = '23456789';
   let prefix = '';
@@ -85,13 +90,46 @@ export async function generateNewPairingCode(): Promise<{ success: boolean; code
 }
 
 export async function authorizeDeviceByCode(code: string, deviceName = 'GHAZAL-POS-01') {
-  if (code.toUpperCase().trim() !== currentPairingCode.code) {
+  const headersList = await headers();
+  const clientIp = getClientIp(headersList);
+
+  const allowed = await checkRateLimit(clientIp, 'pos_device_pairing', 5, 15);
+  if (!allowed) {
+    return { success: false, error: 'تم تجاوز عدد محاولات التفعيل المسموح بها. يرجى المحاولة لاحقاً.' };
+  }
+
+  if (!code || typeof code !== 'string') {
+    return { success: false, error: 'رمز التفعيل غير صالح' };
+  }
+
+  const cleanInput = code.toUpperCase().trim();
+  const activeCode = currentPairingCode.code.toUpperCase().trim();
+
+  // Expiration check
+  if (Date.now() > currentPairingCode.expiresAt) {
+    return { success: false, error: 'رمز التفعيل منتهي الصلاحية' };
+  }
+
+  // Constant-time comparison
+  let isMatch = false;
+  try {
+    const a = Buffer.from(cleanInput);
+    const b = Buffer.from(activeCode);
+    isMatch = a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch {
+    isMatch = false;
+  }
+
+  if (!isMatch) {
     return { success: false, error: 'رمز التفعيل غير صحيح أو منتهي الصلاحية' };
   }
 
+  // Invalidate code after successful pairing to prevent replay
+  currentPairingCode.expiresAt = 0;
+
   cachedDevice.isAuthorized = true;
   cachedDevice.status = 'ONLINE';
-  cachedDevice.deviceName = deviceName;
+  cachedDevice.deviceName = deviceName.trim().substring(0, 50);
   cachedDevice.lastSeenAt = new Date().toISOString();
 
   try {
@@ -110,11 +148,11 @@ export async function authorizeDeviceByCode(code: string, deviceName = 'GHAZAL-P
       where: { machineKey: cachedDevice.machineKey },
       update: {
         isAuthorized: true,
-        deviceName,
+        deviceName: cachedDevice.deviceName,
         lastSeenAt: new Date(),
       },
       create: {
-        deviceName,
+        deviceName: cachedDevice.deviceName,
         machineKey: cachedDevice.machineKey,
         terminalId: cachedDevice.terminalId,
         isAuthorized: true,
@@ -129,6 +167,7 @@ export async function authorizeDeviceByCode(code: string, deviceName = 'GHAZAL-P
 }
 
 export async function toggleDeviceAuthorization(deviceId: string, authorize: boolean) {
+  await requirePermission('manage:settings');
   cachedDevice.isAuthorized = authorize;
   cachedDevice.status = authorize ? 'ONLINE' : 'OFFLINE';
 

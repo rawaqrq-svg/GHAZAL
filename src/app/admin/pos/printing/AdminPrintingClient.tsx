@@ -24,6 +24,9 @@ export default function AdminPrintingClient({ initialSettings }: Props) {
       const res = await updatePrintingSettings(settings);
       if (res.success && res.settings) {
         setSettings(res.settings);
+        try {
+          localStorage.setItem('ghazal_pos_printing_settings', JSON.stringify(res.settings));
+        } catch (e) {}
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3000);
       }

@@ -58,13 +58,21 @@ export function generateTOTPCode(secret: string, counter: number): string {
 
 /**
  * Verify TOTP code with time step window tolerance (e.g. -1, 0, +1)
+ * Uses constant-time comparison to protect against timing attacks.
  */
 export function verifyTOTP(secret: string, code: string, window = 1): boolean {
+  if (!code || typeof code !== 'string' || code.trim().length !== 6) return false;
+  const cleanCode = code.trim();
   const counter = Math.floor(Date.now() / 1000 / 30);
   for (let i = -window; i <= window; i++) {
-    if (generateTOTPCode(secret, counter + i) === code) {
-      return true;
-    }
+    const expected = generateTOTPCode(secret, counter + i);
+    try {
+      const codeBuf = Buffer.from(cleanCode, 'utf8');
+      const expBuf = Buffer.from(expected, 'utf8');
+      if (codeBuf.length === expBuf.length && crypto.timingSafeEqual(codeBuf, expBuf)) {
+        return true;
+      }
+    } catch {}
   }
   return false;
 }
@@ -72,6 +80,6 @@ export function verifyTOTP(secret: string, code: string, window = 1): boolean {
 /**
  * Generate QR Code provisioning URL
  */
-export function getTOTPProvisioningUrl(email: string, secret: string, issuer = 'Dahab Perfumes'): string {
+export function getTOTPProvisioningUrl(email: string, secret: string, issuer = 'GHAZAL Cosmetics ERP'): string {
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 }

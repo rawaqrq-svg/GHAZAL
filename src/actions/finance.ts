@@ -92,7 +92,33 @@ const resilientExpenses: OperatingExpense[] = (globalThis as any).__ghazal_resil
     category: 'كهرباء وإنارة',
     amountFils: 45000, // 45 JOD
     beneficiary: 'شركة الكهرباء الأردنية',
-    description: 'سداد فاتورة إنارة المحل والمعرض',
+    description: 'سداد فاتورة إنارة المحل والمعرض والتكييف',
+    paymentMethod: 'BANK',
+    paidFromDrawer: false,
+    employeeId: 'emp-admin-ghazal-01',
+    employeeName: 'مدير النظام (غزل)',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'exp-003',
+    expenseNumber: 'EXP-1003',
+    category: 'إيجار المعرض',
+    amountFils: 300000, // 300 JOD
+    beneficiary: 'مالك العقار (عين الباشا)',
+    description: 'إيجار فرع صالة المعرض لشهر تشرين الثاني',
+    paymentMethod: 'BANK',
+    paidFromDrawer: false,
+    employeeId: 'emp-admin-ghazal-01',
+    employeeName: 'مدير النظام (غزل)',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'exp-004',
+    expenseNumber: 'EXP-1004',
+    category: 'فواتير المياه والإنترنت',
+    amountFils: 25000, // 25 JOD
+    beneficiary: 'شركة مياهنا وشركة الاتصالات',
+    description: 'سداد فاتورة المياه واشتراك إنترنت الفايبر',
     paymentMethod: 'BANK',
     paidFromDrawer: false,
     employeeId: 'emp-admin-ghazal-01',
@@ -119,6 +145,17 @@ export async function createFinancialVoucher(data: {
 }) {
   try {
     const session = await requirePermission('pos:access');
+    if (!data.amountFils || data.amountFils <= 0 || isNaN(data.amountFils)) {
+      return { success: false, error: 'مبلغ السند المالي يجب أن يكون أكبر من صفر' };
+    }
+    if (!data.partyName || !data.partyName.trim()) {
+      return { success: false, error: 'يرجى إدخال اسم الطرف / المستفيد' };
+    }
+    if (!data.reason || !data.reason.trim()) {
+      return { success: false, error: 'يرجى إدخال سبب الحركة المالية' };
+    }
+
+    const cleanAmountFils = Math.round(data.amountFils);
     const voucherPrefix = data.type === 'RECEIPT' ? 'RC' : 'PV';
     const voucherNumber = `${voucherPrefix}-${Date.now().toString().slice(-6)}`;
     const employeeName = session.employee?.name || 'كاشير غزل';
@@ -127,7 +164,7 @@ export async function createFinancialVoucher(data: {
       id: `vch-${Date.now().toString(36)}`,
       voucherNumber,
       type: data.type,
-      amountFils: data.amountFils,
+      amountFils: cleanAmountFils,
       partyName: data.partyName.trim(),
       reason: data.reason.trim(),
       category: data.category || (data.type === 'RECEIPT' ? 'إيداع وتحصيل' : 'صرف ونفقات'),
@@ -226,6 +263,17 @@ export async function createOperatingExpense(data: {
 }) {
   try {
     const session = await requirePermission('pos:access');
+    if (!data.amountFils || data.amountFils <= 0 || isNaN(data.amountFils)) {
+      return { success: false, error: 'مبلغ المصروف التشغيلي يجب أن يكون أكبر من صفر' };
+    }
+    if (!data.beneficiary || !data.beneficiary.trim()) {
+      return { success: false, error: 'يرجى إدخال اسم المستفيد / المورد' };
+    }
+    if (!data.description || !data.description.trim()) {
+      return { success: false, error: 'يرجى إدخال بيان وتفاصيل المصروف' };
+    }
+
+    const cleanAmountFils = Math.round(data.amountFils);
     const expenseNumber = `EXP-${Date.now().toString().slice(-6)}`;
     const employeeName = session.employee?.name || 'كاشير غزل';
 
@@ -233,7 +281,7 @@ export async function createOperatingExpense(data: {
       id: `exp-${Date.now().toString(36)}`,
       expenseNumber,
       category: data.category,
-      amountFils: data.amountFils,
+      amountFils: cleanAmountFils,
       beneficiary: data.beneficiary.trim(),
       description: data.description.trim(),
       paymentMethod: data.paymentMethod,

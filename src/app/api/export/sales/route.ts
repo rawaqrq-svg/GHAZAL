@@ -1,10 +1,40 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { requireAuth } from '@/lib/dal';
+import { getCurrentSession } from '@/lib/auth';
+import { getEmployeePermissions } from '@/lib/dal';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 
-export async function GET(request: Request) {
+function sanitizeCsvField(value: any): string {
+  if (value === null || value === undefined) return '""';
+  const str = String(value).replace(/"/g, '""');
+  // Prevent CSV Formula Injection (DDE) in Excel/LibreOffice
+  if (/^[=+\-@\t\r]/.test(str)) {
+    return `"'${str}"`;
+  }
+  return `"${str}"`;
+}
+
+export async function GET(request: NextRequest) {
   try {
-    await requireAuth();
+    const ip = getClientIp(request.headers);
+    const isAllowed = await checkRateLimit(ip, 'api_export_sales', 10, 15);
+    if (!isAllowed) {
+      return new NextResponse('Too many export requests', { status: 429 });
+    }
+
+    const session = await getCurrentSession();
+    if (!session || !session.employee?.isActive) {
+      return new NextResponse('Unauthorized: Please log in to export reports', { status: 401 });
+    }
+
+    const roleName = session.employee.role?.name?.toUpperCase() || '';
+    const isAdmin = roleName === 'ADMIN' || roleName === 'SUPER ADMIN';
+    if (!isAdmin) {
+      const perms = await getEmployeePermissions(session.employeeId);
+      if (!perms.includes('manage:reports')) {
+        return new NextResponse('Forbidden: Insufficient permissions to export sales records', { status: 403 });
+      }
+    }
 
     const { searchParams } = new URL(request.url);
     const filterEmployee = searchParams.get('employeeId');
@@ -34,6 +64,7 @@ export async function GET(request: Request) {
     const sales = await prisma.sale.findMany({
       where: whereClause,
       orderBy: { createdAt: 'desc' },
+      take: 5000,
       include: {
         employee: true,
         payments: true
@@ -43,23 +74,34 @@ export async function GET(request: Request) {
     // Create CSV header
     let csv = 'رقم العملية,الكاشير,المصدر,اسم العميل,المجموع الإجمالي (د.أ),طريقة الدفع,التاريخ\n';
 
-    sales.forEach(sale => {
+    for (const sale of sales) {
       const payMethod = sale.payments[0]?.method || '-';
-      const total = (sale.total / 1000).toFixed(2);
+      const total = (sale.total / 1000).toFixed(3);
       const source = sale.source === 'STOREFRONT' ? 'طلب متجر' : 'POS';
       const date = new Date(sale.createdAt).toLocaleString('ar-JO').replace(/,/g, '');
       const empName = sale.employee?.name || '-';
       
-      csv += `${sale.reference},${empName},${source},${sale.customerName || '-'},${total},${payMethod},${date}\n`;
-    });
+      const row = [
+        sanitizeCsvField(sale.reference),
+        sanitizeCsvField(empName),
+        sanitizeCsvField(source),
+        sanitizeCsvField(sale.customerName || '-'),
+        sanitizeCsvField(total),
+        sanitizeCsvField(payMethod),
+        sanitizeCsvField(date)
+      ].join(',');
 
-    // Need BOM for Excel to open UTF-8 correctly
+      csv += row + '\n';
+    }
+
+    // Prepend UTF-8 BOM for Arabic support in Excel
     const bom = '\uFEFF';
     
     return new NextResponse(bom + csv, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': 'attachment; filename="sales_report.csv"',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });
 
