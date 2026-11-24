@@ -77,60 +77,7 @@ export default async function AdminProductEditPage({
   const customBadges = await getProductCustomBadges();
 
   if (!product) {
-    const demoProd = COSMETICS_CATALOG.find(p => p.id === id || p.slug === id);
-    if (demoProd) {
-      product = {
-        id: demoProd.id,
-        nameAr: demoProd.nameAr,
-        nameEn: demoProd.nameEn,
-        sku: demoProd.sku,
-        shortDescription: demoProd.shortDescription,
-        longDescription: demoProd.fullDescription,
-        isVisible: true,
-        isFeatured: demoProd.isFeatured,
-        categoryId: demoProd.categoryId || 'cat-makeup',
-        brandId: null,
-        genderId: null,
-        seasonId: null,
-        familyId: null,
-        tag: demoProd.tag,
-        images: demoProd.images.map(img => ({ id: img.id, url: img.url, isMain: img.isMain })),
-        variants: demoProd.variants.map((v: any, idx: number) => ({
-          id: v.id || `v-${idx}`,
-          size: v.size,
-          shade: v.shade || '',
-          colorName: (v as any).colorName || '',
-          colorHex: (v as any).colorHex || '#E6007E',
-          barcode: v.barcode || demoProd.barcode,
-          sku: v.sku || demoProd.sku,
-          price: v.price,
-          isActive: true
-        })),
-        accords: [],
-        similarProducts: []
-      };
-    } else {
-      // Fallback product structure so page never crashes
-      product = {
-        id,
-        nameAr: 'منتج تجميل مختار',
-        nameEn: 'Selected Beauty Product',
-        sku: 'GHZ-0001',
-        shortDescription: 'مستحضر تجميل وعناية أصلي',
-        longDescription: 'تفاصيل مستحضر التجميل والعناية',
-        isVisible: true,
-        isFeatured: false,
-        categoryId: 'cat-makeup',
-        brandId: null,
-        genderId: null,
-        seasonId: null,
-        familyId: null,
-        images: [{ id: 'img-1', url: '/logo.png', isMain: true }],
-        variants: [{ id: 'v-1', size: 'Standard', shade: 'اللون الأساسي', colorHex: '#E6007E', price: 15000, stock: 50, barcode: '6902395778014' }],
-        accords: [],
-        similarProducts: []
-      };
-    }
+    notFound();
   }
 
   const assignedTag = (product as any)?.tag || 

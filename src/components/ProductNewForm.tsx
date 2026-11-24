@@ -40,7 +40,8 @@ export function ProductNewForm({
   seasons = [],
   families = [],
   nextSku,
-  initialChannel
+  initialChannel,
+  initialBarcode
 }: { 
   categories: Category[]; 
   brands?: BrandOption[];
@@ -50,6 +51,7 @@ export function ProductNewForm({
   globalPrices?: Record<string, number>;
   nextSku?: string;
   initialChannel?: 'ONLINE' | 'POS' | 'SHARED' | 'STOREFRONT' | 'BOTH';
+  initialBarcode?: string;
 }) {
   const router = useRouter();
   const [channel, setChannel] = useState<'BOTH' | 'STOREFRONT' | 'POS'>(() => {
@@ -72,7 +74,7 @@ export function ProductNewForm({
       colorName: 'طبيعي Natural',
       colorHex: '#E6007E',
       imageUrl: '',
-      barcode: '',
+      barcode: initialBarcode || '',
       sku: `${autoSku}-01`,
       price: '15.000',
       isActive: true
@@ -81,7 +83,7 @@ export function ProductNewForm({
   
   const [variants, setVariants] = useState<CosmeticVariant[]>(defaultVariants);
   const [activeScanIndex, setActiveScanIndex] = useState<number | null>(0);
-  const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(null);
+  const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(initialBarcode || null);
 
   // Camera Barcode Scanner State
   const [isCameraScannerOpen, setIsCameraScannerOpen] = useState(false);
@@ -308,6 +310,15 @@ export function ProductNewForm({
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">
           {error}
+        </div>
+      )}
+
+      {initialBarcode && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl text-xs font-bold flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>تم مسح باركود جديد غير مسجل مسبقاً: <strong className="font-mono text-emerald-900 bg-white px-2 py-0.5 rounded border border-emerald-200">{initialBarcode}</strong> — تم تعبئته تلقائياً في بيانات الباركود أدناه.</span>
+          </div>
         </div>
       )}
 

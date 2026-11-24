@@ -609,3 +609,53 @@ export async function updateProductChannelAction(productId: string, channel: 'ON
     return { success: false, error: error.message };
   }
 }
+
+/**
+ * البحث عن منتج بواسطة الباركود أو الـ SKU للتعديل السريع عبر كاميرا الهاتف
+ */
+export async function findProductByBarcodeOrSkuAction(code: string) {
+  try {
+    const clean = code.trim();
+    if (!clean) return { success: false, error: 'الباركود فارغ' };
+
+    // Search in DB by variant barcode, variant SKU, or product SKU
+    const product = await prisma.product.findFirst({
+      where: {
+        OR: [
+          { sku: { equals: clean, mode: 'insensitive' } },
+          { id: clean },
+          { variants: { some: { barcode: clean } } },
+          { variants: { some: { sku: { equals: clean, mode: 'insensitive' } } } }
+        ]
+      },
+      select: {
+        id: true,
+        nameAr: true,
+        nameEn: true,
+        sku: true,
+        channel: true,
+        variants: {
+          select: {
+            id: true,
+            barcode: true,
+            sku: true,
+            price: true,
+            costPrice: true,
+            size: true,
+            shade: true
+          }
+        }
+      }
+    });
+
+    if (product) {
+      return { success: true, product };
+    }
+
+    return { success: false, notFound: true };
+  } catch (error: any) {
+    console.error('findProductByBarcodeOrSkuAction error:', error);
+    return { success: false, error: error.message };
+  }
+}
+

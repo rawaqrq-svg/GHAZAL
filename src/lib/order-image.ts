@@ -27,8 +27,8 @@ export function resolvePOSItemImage(item: any): string | null {
 
   if (catalogItem) {
     const matchingVar = catalogItem.variants?.find(v => v.id === item.variantId || v.sku === item.sku);
-    return matchingVar?.imageUrl || catalogItem.images?.find(i => i.isMain)?.url || catalogItem.images?.[0]?.url || null;
+    return matchingVar?.imageUrl || catalogItem.images?.find(i => i.isMain)?.url || catalogItem.images?.[0]?.url || '/logo.png';
   }
 
-  return null;
+  return '/logo.png';
 }

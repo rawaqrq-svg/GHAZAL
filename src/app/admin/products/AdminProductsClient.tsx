@@ -2,44 +2,94 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { filsToDisplay } from '@/lib/money';
-import { Search, Plus, Sparkles, Tag, Trash2, Edit3, Globe, ShoppingBag, Eye, EyeOff, Loader2, Layers, CheckCircle2 } from 'lucide-react';
-import { deleteProduct, toggleProductStoreVisibility, toggleProductPOSVisibility, updateProductChannelAction } from '@/actions/products';
+import { Search, Plus, Sparkles, Tag, Trash2, Edit3, Globe, ShoppingBag, Eye, EyeOff, Loader2, Layers, CheckCircle2, ScanLine, Camera } from 'lucide-react';
+import { deleteProduct, toggleProductStoreVisibility, toggleProductPOSVisibility, updateProductChannelAction, findProductByBarcodeOrSkuAction } from '@/actions/products';
+import { CameraBarcodeScannerModal } from '@/components/CameraBarcodeScannerModal';
 
-export function AdminProductsClient({ products, globalPrices, adminId, categories }: { products: any[], globalPrices: any, adminId: string, categories: any[] }) {
+export function AdminProductsClient({ 
+  products, 
+  globalPrices, 
+  adminId, 
+  categories,
+  initialChannelParam = 'all'
+}: { 
+  products: any[], 
+  globalPrices: any, 
+  adminId: string, 
+  categories: any[],
+  initialChannelParam?: string
+}) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [productList, setProductList] = useState<any[]>(products);
 
   useEffect(() => {
     setProductList(products);
   }, [products]);
+
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
-  const [activeChannelTab, setActiveChannelTab] = useState<'ALL' | 'ONLINE' | 'POS' | 'SHARED'>('ALL');
 
-  // Channel product counts
+  // Parse active channel tab from URL search parameter (e.g. ?channel=all / online / pos / shared)
+  const currentUrlChannel = (searchParams?.get('channel') || initialChannelParam || 'all').toLowerCase();
+  const [activeChannelTab, setActiveChannelTab] = useState<'ALL' | 'ONLINE' | 'POS' | 'SHARED'>(() => {
+    if (currentUrlChannel === 'online') return 'ONLINE';
+    if (currentUrlChannel === 'pos') return 'POS';
+    if (currentUrlChannel === 'shared') return 'SHARED';
+    return 'ALL';
+  });
+
+  // Sync state if URL changes externally
+  useEffect(() => {
+    const param = (searchParams?.get('channel') || 'all').toLowerCase();
+    if (param === 'online') setActiveChannelTab('ONLINE');
+    else if (param === 'pos') setActiveChannelTab('POS');
+    else if (param === 'shared') setActiveChannelTab('SHARED');
+    else setActiveChannelTab('ALL');
+  }, [searchParams]);
+
+  // Barcode Scanner Modal State for Phone / Camera
+  const [isBarcodeScannerOpen, setIsBarcodeScannerOpen] = useState(false);
+  const [isSearchingBarcode, setIsSearchingBarcode] = useState(false);
+  const [scannerNotification, setScannerNotification] = useState<string | null>(null);
+
+  // Exact Channel product counts
+  const totalCount = productList.length;
   const onlineCount = useMemo(() => 
-    productList.filter(p => p.channel === 'ONLINE' || (p.isVisible && p.isPOSAvailable === false)).length,
+    productList.filter(p => p.channel === 'ONLINE').length,
     [productList]
   );
   const posCount = useMemo(() => 
-    productList.filter(p => p.channel === 'POS' || (!p.isVisible && p.isPOSAvailable)).length,
+    productList.filter(p => p.channel === 'POS' || (!p.channel && !p.isVisible)).length,
     [productList]
   );
   const sharedCount = useMemo(() => 
-    productList.filter(p => p.channel === 'SHARED' || (!p.channel && (p.isVisible !== false && p.isPOSAvailable !== false))).length,
+    productList.filter(p => p.channel === 'SHARED').length,
     [productList]
   );
+
+  // Switch tab and update URL query parameter (?channel=...)
+  const handleTabChange = (tab: 'ALL' | 'ONLINE' | 'POS' | 'SHARED') => {
+    setActiveChannelTab(tab);
+    const paramVal = tab === 'ALL' ? 'all' : tab.toLowerCase();
+    const url = new URL(window.location.href);
+    url.searchParams.set('channel', paramVal);
+    window.history.pushState({}, '', url.toString());
+  };
 
   // Filter products by search and channel
   const filteredProducts = useMemo(() => {
     let list = productList;
     if (activeChannelTab === 'ONLINE') {
-      list = list.filter(p => p.channel === 'ONLINE' || (p.isVisible && p.isPOSAvailable === false));
+      list = list.filter(p => p.channel === 'ONLINE');
     } else if (activeChannelTab === 'POS') {
-      list = list.filter(p => p.channel === 'POS' || (!p.isVisible && p.isPOSAvailable));
+      list = list.filter(p => p.channel === 'POS' || (!p.channel && !p.isVisible));
     } else if (activeChannelTab === 'SHARED') {
-      list = list.filter(p => p.channel === 'SHARED' || (!p.channel && (p.isVisible !== false && p.isPOSAvailable !== false)));
+      list = list.filter(p => p.channel === 'SHARED');
     }
 
     if (!search.trim()) return list;
@@ -48,10 +98,61 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
       p.nameAr?.toLowerCase().includes(lowerSearch) || 
       (p.nameEn && p.nameEn.toLowerCase().includes(lowerSearch)) ||
       (p.sku && p.sku.toLowerCase().includes(lowerSearch)) ||
+      (p.barcode && p.barcode.toLowerCase().includes(lowerSearch)) ||
+      (p.variants && p.variants.some((v: any) => v.barcode?.toLowerCase().includes(lowerSearch) || v.sku?.toLowerCase().includes(lowerSearch))) ||
       (p.brand?.name && p.brand.name.toLowerCase().includes(lowerSearch)) ||
       (p.brand?.nameAr && p.brand.nameAr.toLowerCase().includes(lowerSearch))
     );
   }, [productList, search, activeChannelTab]);
+
+  // Handle Barcode Scanned via Camera / Phone
+  const handleBarcodeScanned = async (scannedBarcode: string) => {
+    setIsBarcodeScannerOpen(false);
+    const code = scannedBarcode.trim();
+    if (!code) return;
+
+    setIsSearchingBarcode(true);
+    setScannerNotification(`جارٍ فحص الباركود: ${code}...`);
+
+    // 1. Search in local product list
+    const localMatch = productList.find(p => 
+      p.barcode === code || 
+      p.sku === code ||
+      p.variants?.some((v: any) => v.barcode === code || v.sku === code)
+    );
+
+    if (localMatch) {
+      setScannerNotification(`تم العثور على المنتج: "${localMatch.nameAr}" — جاري الانتقال للتعديل...`);
+      setTimeout(() => {
+        setIsSearchingBarcode(false);
+        router.push(`/admin/products/${localMatch.id}`);
+      }, 400);
+      return;
+    }
+
+    // 2. Search database via Server Action (in case not in memory)
+    try {
+      const res = await findProductByBarcodeOrSkuAction(code);
+      if (res?.success && res.product?.id) {
+        setScannerNotification(`تم العثور على المنتج: "${res.product.nameAr}" — جاري الانتقال للتعديل...`);
+        setTimeout(() => {
+          setIsSearchingBarcode(false);
+          router.push(`/admin/products/${res.product.id}`);
+        }, 400);
+        return;
+      }
+    } catch (err) {
+      console.error('Error finding barcode in DB:', err);
+    }
+
+    // 3. Not found: Open "Add New Product" with prefilled barcode parameter
+    setScannerNotification(`الباركود (${code}) جديد وغير مسجل! جاري فتح صفحة إضافة منتج جديد...`);
+    setTimeout(() => {
+      setIsSearchingBarcode(false);
+      const targetChannel = activeChannelTab === 'ALL' ? 'POS' : activeChannelTab;
+      router.push(`/admin/products/new?barcode=${encodeURIComponent(code)}&channel=${targetChannel}`);
+    }, 600);
+  };
 
   const toggleSelectAll = () => {
     if (selectedIds.length === filteredProducts.length) {
@@ -182,17 +283,29 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
             التحكم المباشر بالعرض في المتجر والكاشير، الدرجات، الباركود، والأسعار • {productList.length} منتج
           </p>
         </div>
-        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto items-stretch sm:items-center">
           <div className="relative">
             <Search className="w-4 h-4 text-zinc-400 absolute start-3 top-3" />
             <input 
               type="text" 
-              placeholder="بحث بالاسم، الماركة أو SKU..." 
+              placeholder="بحث بالاسم، الباركود أو SKU..." 
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="border border-zinc-300 rounded-xl ps-9 pe-4 py-2 text-sm focus:outline-none focus:border-[#E6007E] w-full sm:w-64 bg-white"
             />
           </div>
+
+          {/* زر مسح الباركود بالكاميرا للهاتف والكمبيوتر */}
+          <button
+            type="button"
+            onClick={() => setIsBarcodeScannerOpen(true)}
+            className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold transition text-sm shadow-sm whitespace-nowrap cursor-pointer"
+            title="مسح باركود المنتج بواسطة كاميرا الهاتف لتعديله فوراً أو إضافته إن لم يكن موجوداً"
+          >
+            <ScanLine className="w-4 h-4" />
+            <span>مسح باركود بالهاتف</span>
+          </button>
+
           <Link
             href={
               activeChannelTab === 'ONLINE' ? '/admin/products/new?channel=ONLINE' :
@@ -217,7 +330,7 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
       <div className="flex flex-wrap items-center gap-2 p-1.5 bg-zinc-100 rounded-2xl border border-zinc-200">
         <button
           type="button"
-          onClick={() => setActiveChannelTab('ALL')}
+          onClick={() => handleTabChange('ALL')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
             activeChannelTab === 'ALL'
               ? 'bg-zinc-800 text-white shadow-xs'
@@ -227,13 +340,13 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
           <Layers className="w-4 h-4" />
           <span>كافة المنتجات</span>
           <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-zinc-200 text-zinc-800">
-            {productList.length}
+            {totalCount}
           </span>
         </button>
 
         <button
           type="button"
-          onClick={() => setActiveChannelTab('ONLINE')}
+          onClick={() => handleTabChange('ONLINE')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
             activeChannelTab === 'ONLINE'
               ? 'bg-blue-600 text-white shadow-xs'
@@ -251,7 +364,7 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
 
         <button
           type="button"
-          onClick={() => setActiveChannelTab('POS')}
+          onClick={() => handleTabChange('POS')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
             activeChannelTab === 'POS'
               ? 'bg-amber-600 text-white shadow-xs'
@@ -269,7 +382,7 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
 
         <button
           type="button"
-          onClick={() => setActiveChannelTab('SHARED')}
+          onClick={() => handleTabChange('SHARED')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
             activeChannelTab === 'SHARED'
               ? 'bg-[#E6007E] text-white shadow-xs'
@@ -285,6 +398,26 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
           </span>
         </button>
       </div>
+
+      {/* Modal ماسح الباركود بالكاميرا للهاتف */}
+      <CameraBarcodeScannerModal
+        isOpen={isBarcodeScannerOpen}
+        onClose={() => setIsBarcodeScannerOpen(false)}
+        onScan={handleBarcodeScanned}
+        title="مسح باركود المنتج بالهاتف للبحث والتعديل أو الإضافة"
+      />
+
+      {/* شاشة انتظار الفحص والتوجيه التلقائي */}
+      {isSearchingBarcode && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl flex flex-col items-center gap-3 text-center max-w-sm border border-pink-100">
+            <Loader2 className="w-8 h-8 text-[#E6007E] animate-spin" />
+            <p className="font-bold text-sm text-zinc-800 leading-relaxed">
+              {scannerNotification || 'جاري فحص الباركود...'}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl shadow-sm border border-zinc-200/80 overflow-hidden">
         <div className="overflow-x-auto w-full pb-2">

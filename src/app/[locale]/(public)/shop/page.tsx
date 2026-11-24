@@ -38,200 +38,7 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
 }
 
 // Fallback beauty catalog if DB is empty or during local dev
-const fallbackCatalog = [
-  {
-    id: 'ghaz-prod-1',
-    slug: 'maybelline-superstay-vinyl-ink',
-    nameAr: 'أحمر شفاه مايبيلين سوبر ستاي فينيل إنك',
-    nameEn: 'Maybelline Super Stay Vinyl Ink',
-    categoryId: 'cat-makeup',
-    categorySlug: 'makeup',
-    categoryName: 'المكياج',
-    brandName: 'MAYBELLINE',
-    isFeatured: true,
-    priceFils: 12000,
-    rating: 4.9,
-    reviewsCount: 380,
-    images: [{ url: 'https://images.unsplash.com/photo-1586495777744-4413f21062fa?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v1', size: '4.2ml', shade: '20 Coy (#E6007E)', price: 12000, colorHex: '#E6007E' }],
-  },
-  {
-    id: 'ghaz-prod-11',
-    slug: 'loreal-true-match-foundation',
-    nameAr: 'كريم أساس لوريال ترو ماتش الفائق النعومة',
-    nameEn: "L'Oréal True Match Foundation",
-    categoryId: 'cat-makeup',
-    categorySlug: 'makeup',
-    categoryName: 'المكياج',
-    brandName: "L'ORÉAL PARIS",
-    isFeatured: true,
-    priceFils: 15000,
-    rating: 4.9,
-    reviewsCount: 412,
-    images: [{ url: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v11', size: '30ml', shade: '3N Creamy Beige', price: 15000, colorHex: '#E2B897' }],
-  },
-  {
-    id: 'ghaz-prod-2',
-    slug: 'loreal-infaillible-foundation',
-    nameAr: 'كريم أساس لوريال إنفاليبل 24 ساعة',
-    nameEn: "L'Oréal Infaillible 24H Foundation",
-    categoryId: 'cat-makeup',
-    categorySlug: 'makeup',
-    categoryName: 'المكياج',
-    brandName: "L'ORÉAL PARIS",
-    isFeatured: true,
-    priceFils: 16500,
-    rating: 4.9,
-    reviewsCount: 412,
-    images: [{ url: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v2', size: '30ml', shade: '120 Vanilla', price: 16500, colorHex: '#E8C39E' }],
-  },
-  {
-    id: 'ghaz-prod-12',
-    slug: 'maybelline-lash-sensational-mascara',
-    nameAr: 'ماسكارا مايبيلين لاش سينسيشنال لتكثيف وتطويل الرموش',
-    nameEn: 'Maybelline Lash Sensational Mascara',
-    categoryId: 'cat-makeup',
-    categorySlug: 'makeup',
-    categoryName: 'المكياج',
-    brandName: 'MAYBELLINE',
-    isFeatured: true,
-    priceFils: 11000,
-    rating: 4.9,
-    reviewsCount: 502,
-    images: [{ url: 'https://images.unsplash.com/photo-1591360236480-4ed861025fa1?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v12', size: '9.5ml', shade: 'Very Black Waterproof', price: 11000, colorHex: '#1A1A1A' }],
-  },
-  {
-    id: 'ghaz-prod-3',
-    slug: 'nyx-ultimate-shadow-palette',
-    nameAr: 'باليت ظلال عيون ألتيميت شادو من نيكْس',
-    nameEn: 'NYX Ultimate Shadow Palette Warm Neutrals',
-    categoryId: 'cat-makeup',
-    categorySlug: 'makeup',
-    categoryName: 'المكياج',
-    brandName: 'NYX MAKEUP',
-    isFeatured: false,
-    priceFils: 19000,
-    rating: 4.8,
-    reviewsCount: 186,
-    images: [{ url: 'https://images.unsplash.com/photo-1512496015851-a90fb38ba796?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v3', size: '16 Shades', shade: 'Warm Neutrals', price: 19000, colorHex: '#9B5B32' }],
-  },
-  {
-    id: 'ghaz-prod-4',
-    slug: 'laneige-lip-sleeping-mask-berry',
-    nameAr: 'مرطب الشفاه الليلي بالتوت من لانيج',
-    nameEn: 'Laneige Lip Sleeping Mask Berry',
-    categoryId: 'cat-skincare',
-    categorySlug: 'skincare',
-    categoryName: 'العناية بالبشرة',
-    brandName: 'LANEIGE',
-    isFeatured: true,
-    priceFils: 18000,
-    rating: 5.0,
-    reviewsCount: 238,
-    images: [{ url: 'https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v4', size: '20g', shade: 'Berry Original', price: 18000, colorHex: '#FF6B81' }],
-  },
-  {
-    id: 'ghaz-prod-5',
-    slug: 'the-ordinary-niacinamide-zinc',
-    nameAr: 'سيروم النياسيناميد 10% والزنك 1% من ذا أورديناري',
-    nameEn: 'The Ordinary Niacinamide 10% + Zinc 1%',
-    categoryId: 'cat-skincare',
-    categorySlug: 'skincare',
-    categoryName: 'العناية بالبشرة',
-    brandName: 'THE ORDINARY',
-    isFeatured: false,
-    priceFils: 8500,
-    rating: 4.9,
-    reviewsCount: 520,
-    images: [{ url: 'https://images.unsplash.com/photo-1620916566398-39f1143ab7be?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v5', size: '30ml', shade: 'Standard', price: 8500, colorHex: '#F2F2F2' }],
-  },
-  {
-    id: 'ghaz-prod-6',
-    slug: 'cerave-hydrating-cleanser',
-    nameAr: 'غسول الوجه المرطب للبشرة الجافة والعادية من سيرافي',
-    nameEn: 'CeraVe Hydrating Facial Cleanser',
-    categoryId: 'cat-skincare',
-    categorySlug: 'skincare',
-    categoryName: 'العناية بالبشرة',
-    brandName: 'CERAVE',
-    isFeatured: false,
-    priceFils: 11500,
-    rating: 4.9,
-    reviewsCount: 310,
-    images: [{ url: 'https://images.unsplash.com/photo-1556228720-195a672e8a03?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v6', size: '236ml', shade: 'Standard', price: 11500, colorHex: '#EBF4F6' }],
-  },
-  {
-    id: 'ghaz-prod-7',
-    slug: 'argan-oil-hair-repair-mask',
-    nameAr: 'ماسك زيت الأرغان لإصلاح وتغذية الشعر',
-    nameEn: 'Moroccan Argan Oil Hair Repair Mask',
-    categoryId: 'cat-haircare',
-    categorySlug: 'haircare',
-    categoryName: 'العناية بالشعر',
-    brandName: 'GHAZAL CARE',
-    isFeatured: true,
-    priceFils: 14000,
-    rating: 4.8,
-    reviewsCount: 140,
-    images: [{ url: 'https://images.unsplash.com/photo-1608248597359-00918f0f089b?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v7', size: '250ml', shade: 'معالج مكثف', price: 14000, colorHex: '#D4AF37' }],
-  },
-  {
-    id: 'ghaz-prod-8',
-    slug: 'ghazal-signature-edp',
-    nameAr: 'عطر غزل الفاخر – أو دو بارفان',
-    nameEn: 'GHAZAL Signature Eau De Parfum',
-    categoryId: 'cat-fragrances',
-    categorySlug: 'fragrances',
-    categoryName: 'العطور',
-    brandName: 'GHAZAL BRAND',
-    isFeatured: true,
-    priceFils: 25000,
-    rating: 5.0,
-    reviewsCount: 195,
-    images: [{ url: 'https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v8', size: '50ml', shade: 'Eau De Parfum', price: 25000, colorHex: '#E6007E' }],
-  },
-  {
-    id: 'ghaz-prod-13',
-    slug: 'pro-makeup-brush-set',
-    nameAr: 'طقم فرش مكياج احترافية ناعمة (12 قطعة)',
-    nameEn: 'Pro Soft Makeup Brush Set 12pcs',
-    categoryId: 'cat-beauty-tools',
-    categorySlug: 'beauty-tools',
-    categoryName: 'أدوات التجميل',
-    brandName: 'GHAZAL TOOLS',
-    isFeatured: true,
-    priceFils: 11900,
-    rating: 4.8,
-    reviewsCount: 88,
-    images: [{ url: 'https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v9', size: '12 فرشاة + حقيبة', shade: 'Rose Gold', price: 11900, colorHex: '#B76E79' }],
-  },
-  {
-    id: 'ghaz-prod-14',
-    slug: 'velvet-hair-scrunchies-pack',
-    nameAr: 'مجموعة ربطات شعر مخملية فاخرة (6 قطع)',
-    nameEn: 'Luxury Velvet Hair Scrunchies Pack',
-    categoryId: 'cat-accessories',
-    categorySlug: 'accessories',
-    categoryName: 'الإكسسوارات',
-    brandName: 'GHAZAL ACCESSORIES',
-    isFeatured: false,
-    priceFils: 5000,
-    rating: 4.7,
-    reviewsCount: 65,
-    images: [{ url: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=600&q=80', isMain: true }],
-    variants: [{ id: 'v10', size: '6 قطع', shade: 'Pastel Mix', price: 5000, colorHex: '#E9C2C9' }],
-  },
-];
+const fallbackCatalog: any[] = [];
 
 export default async function ShopPage({ 
   params, 
@@ -270,8 +77,11 @@ export default async function ShopPage({
   let customBadges: Record<string, string> = {};
 
   try {
-    // Build prisma where clause
-    const where: any = { isVisible: true };
+    // Build prisma where clause (Online storefront only queries ONLINE and SHARED channels)
+    const where: any = { 
+      isVisible: true,
+      channel: { in: ['ONLINE', 'SHARED'] }
+    };
     
     if (categoryParam) {
       where.category = {
@@ -353,67 +163,15 @@ export default async function ShopPage({
     } catch {}
   }
 
-  // If DB returned 0 products or is empty/offline, filter from COSMETICS_CATALOG
-  if (products.length === 0) {
-    let filtered = COSMETICS_CATALOG.filter(p => !p.isPOSOnly);
-
-    if (categoryParam) {
-      filtered = filtered.filter(p => 
-        p.categorySlug === normalizedCategory || 
-        p.categorySlug === categoryParam || 
-        p.categoryId === categoryParam
-      );
-    }
-
-    if (filterParam === 'offers') {
-      filtered = filtered.filter(p => findActivePromotionForProduct(p.id, p.slug, 'STOREFRONT', activePromos) !== null);
-    }
-
-    if (q) {
-      const lowerQ = q.toLowerCase();
-      filtered = filtered.filter(p => 
-        p.nameAr.toLowerCase().includes(lowerQ) || 
-        p.nameEn.toLowerCase().includes(lowerQ) ||
-        p.brandName.toLowerCase().includes(lowerQ)
-      );
-    }
-
-    // Map to expected structure with strict promotion pricing
-    products = filtered.map(p => {
-      const pricing = computeProductPromotionPricing(p, 'STOREFRONT', activePromos);
-
-      return {
-        id: p.id,
-        slug: p.slug,
-        nameAr: p.nameAr,
-        nameEn: p.nameEn,
-        category: { id: p.categoryId, name: p.categoryName, slug: p.categorySlug },
-        categoryId: p.categoryId,
-        brand: { name: p.brandName },
-        variants: p.variants,
-        images: p.images,
-        rating: p.rating,
-        isFeatured: p.isFeatured,
-        tag: p.tag || customBadges[p.id] || customBadges[p.slug] || undefined,
-        priceFils: pricing.priceFils,
-        originalPriceFils: pricing.originalPriceFils,
-        compareAtPriceFils: pricing.compareAtPriceFils,
-        discountPercent: pricing.discountPercent,
-        hasOffer: pricing.hasOffer,
-      };
-    });
-    totalCount = products.length;
-
-    if (categories.length === 0) {
-      categories = [
-        { id: 'cat-makeup', name: 'المكياج', slug: 'makeup' },
-        { id: 'cat-skincare', name: 'العناية بالبشرة', slug: 'skincare' },
-        { id: 'cat-haircare', name: 'العناية بالشعر', slug: 'haircare' },
-        { id: 'cat-fragrances', name: 'العطور', slug: 'fragrances' },
-        { id: 'cat-beauty-tools', name: 'أدوات التجميل', slug: 'beauty-tools' },
-        { id: 'cat-accessories', name: 'الإكسسوارات', slug: 'accessories' },
-      ];
-    }
+  if (categories.length === 0) {
+    categories = [
+      { id: 'cat-makeup', name: 'المكياج', slug: 'makeup' },
+      { id: 'cat-skincare', name: 'العناية بالبشرة', slug: 'skincare' },
+      { id: 'cat-haircare', name: 'العناية بالشعر', slug: 'haircare' },
+      { id: 'cat-fragrances', name: 'العطور', slug: 'fragrances' },
+      { id: 'cat-beauty-tools', name: 'أدوات التجميل', slug: 'beauty-tools' },
+      { id: 'cat-accessories', name: 'الإكسسوارات', slug: 'accessories' },
+    ];
   }
 
   // Category-specific rich content headers (كلام مناسب لكل قسم)

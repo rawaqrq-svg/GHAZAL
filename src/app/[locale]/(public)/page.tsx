@@ -60,11 +60,14 @@ export default async function StoreFrontPage({ params }: { params: Promise<Param
   const { locale = 'ar' } = await params;
   const isAr = locale === 'ar';
 
-  // Fetch real products from DB if available, with graceful fallback
+  // Fetch real products from DB if available (Only products assigned to ONLINE or SHARED channels)
   let dbProducts: any[] = [];
   try {
     dbProducts = await prisma.product.findMany({
-      where: { isVisible: true },
+      where: { 
+        isVisible: true,
+        channel: { in: ['ONLINE', 'SHARED'] }
+      },
       take: 8,
       include: {
         variants: { where: { isActive: true }, take: 1 },
@@ -73,7 +76,7 @@ export default async function StoreFrontPage({ params }: { params: Promise<Param
       },
     });
   } catch (err) {
-    console.warn('Database query bypassed for local fallback rendering:', err);
+    console.warn('Database query bypassed:', err);
   }
 
   // Load Hero Banner Slides from CMS (Hero Slides Manager)
@@ -101,126 +104,35 @@ export default async function StoreFrontPage({ params }: { params: Promise<Param
     { nameAr: 'هدايا وعروض', nameEn: 'Gifts & Sets', icon: <OffersIcon className="w-9 h-9 md:w-11 md:h-11" />, href: `/${locale}/shop?filter=offers` },
   ];
 
-  // 2. Curated Flagship Beauty Products (مطابقة لمنتجات المرجع الرسمي)
-  const fallbackBestSellers = [
-    {
-      id: 'ghaz-prod-11',
-      slug: 'loreal-true-match-foundation',
-      nameAr: 'كريم أساس لوريال ترو ماتش الفائق النعومة',
-      nameEn: "L'Oréal True Match Foundation",
-      brand: "L'ORÉAL PARIS",
-      priceFils: 15000,
-      rating: 4.9,
-      reviewsCount: 412,
-      shade: 'درجة 3N Creamy Beige',
-      imageUrl: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=600&q=80',
-    },
-    {
-      id: 'ghaz-prod-4',
-      slug: 'laneige-lip-sleeping-mask-berry',
-      nameAr: 'قناع ترطيب شفاه لانيج بيري',
-      nameEn: 'Laneige Lip Sleeping Mask Berry',
-      brand: 'LANEIGE',
-      priceFils: 18000,
-      rating: 5.0,
-      reviewsCount: 238,
-      shade: 'Berry Pink 20g',
-      imageUrl: 'https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?auto=format&fit=crop&w=600&q=80',
-    },
-    {
-      id: 'ghaz-prod-3',
-      slug: 'nyx-ultimate-shadow-palette',
-      nameAr: 'باليت ظلال عيون ألتيميت شادو نود',
-      nameEn: 'NYX Ultimate Shadow Palette',
-      brand: 'NYX MAKEUP',
-      priceFils: 19000,
-      rating: 4.8,
-      reviewsCount: 186,
-      shade: '16 لون مات وشيمر',
-      imageUrl: 'https://images.unsplash.com/photo-1512496015851-a90fb38ba796?auto=format&fit=crop&w=600&q=80',
-    },
-    {
-      id: 'ghaz-prod-12',
-      slug: 'maybelline-lash-sensational-mascara',
-      nameAr: 'ماسكارا مايبيلين لتكثيف وتطويل الرموش',
-      nameEn: 'Maybelline Lash Sensational Mascara',
-      brand: 'MAYBELLINE',
-      priceFils: 11000,
-      rating: 4.9,
-      reviewsCount: 502,
-      shade: 'Very Black Waterproof',
-      imageUrl: 'https://images.unsplash.com/photo-1591360236480-4ed861025fa1?auto=format&fit=crop&w=600&q=80',
-    },
-    {
-      id: 'ghaz-prod-8',
-      slug: 'ghazal-signature-edp',
-      nameAr: 'عطر غزل النسائي الفاخر – أو دو بارفان',
-      nameEn: 'GHAZAL Signature Eau de Parfum',
-      brand: 'GHAZAL EXCLUSIVE',
-      priceFils: 25000,
-      rating: 5.0,
-      reviewsCount: 97,
-      shade: '50ml EDP وردي ناعم',
-      imageUrl: 'https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?auto=format&fit=crop&w=600&q=80',
-    },
-    {
-      id: 'ghaz-prod-6',
-      slug: 'cerave-hydrating-cleanser',
-      nameAr: 'غسول الوجه المرطب للبشرة الجافة والعادية من سيرافي',
-      nameEn: 'CeraVe Hydrating Facial Cleanser',
-      brand: 'CERAVE',
-      priceFils: 11500,
-      rating: 4.9,
-      reviewsCount: 310,
-      shade: '236ml طبي معتمد',
-      imageUrl: 'https://images.unsplash.com/photo-1556228720-195a672e8a03?auto=format&fit=crop&w=600&q=80',
-    },
-  ];
-
+  // 2. Real Storefront Products from Database (ONLINE & SHARED channels only)
   const customBadges = await getProductCustomBadges();
-  const bestSellersWithCustomBadges = fallbackBestSellers.map(p => ({
-    ...p,
-    tag: customBadges[p.id] || customBadges[p.slug] || (p as any).tag || undefined,
-  }));
-
-  // 3. Dynamic Special Offers (تظهر فقط وحصرياً إذا كان هناك عرض نشط مطبق من admin/promotions)
   const activePromotions = getActivePromotions('STOREFRONT');
-  const catalogPool = COSMETICS_CATALOG.filter(p => !p.isPOSOnly).map(p => ({
-    id: p.id,
-    slug: p.slug,
-    nameAr: p.nameAr,
-    nameEn: p.nameEn,
-    brand: p.brandName,
-    priceFils: p.priceFils,
-    rating: p.rating,
-    reviewsCount: p.reviewsCount,
-    shade: p.variants?.[0]?.shade || '',
-    imageUrl: p.images?.[0]?.url || '/logo.png',
-    variants: p.variants,
-    tag: p.tag,
-  }));
+
+  const realBestSellers = dbProducts.map(p => {
+    const primaryVariant = p.variants?.[0];
+    const lowestPrice = primaryVariant ? primaryVariant.price : 0;
+    const promoPricing = computeProductPromotionPricing({ ...p, priceFils: lowestPrice }, 'STOREFRONT', activePromotions);
+    return {
+      id: p.id,
+      slug: p.slug,
+      nameAr: p.nameAr,
+      nameEn: p.nameEn,
+      brand: p.category?.name || (isAr ? 'غزل' : 'GHAZAL'),
+      priceFils: promoPricing.priceFils,
+      originalPriceFils: promoPricing.originalPriceFils,
+      discountPercent: promoPricing.discountPercent,
+      rating: p.rating || 5.0,
+      reviewsCount: p.reviewsCount || 0,
+      shade: primaryVariant?.shade || '',
+      tag: customBadges[p.id] || customBadges[p.slug] || p.reviewReasons?.replace('TAG:', '') || undefined,
+      imageUrl: p.images?.[0]?.url || '/logo.png',
+    };
+  });
 
   // Filter only products that have an active promotion applied from /admin/promotions
-  const realOffers = catalogPool
-    .filter(p => findActivePromotionForProduct(p.id, p.slug, 'STOREFRONT', activePromotions) !== null)
-    .map(p => {
-      const promoPricing = computeProductPromotionPricing(p, 'STOREFRONT', activePromotions);
-      return {
-        id: p.id,
-        slug: p.slug,
-        nameAr: p.nameAr,
-        nameEn: p.nameEn,
-        brand: p.brand,
-        priceFils: promoPricing.priceFils,
-        originalPriceFils: promoPricing.originalPriceFils,
-        discountPercent: promoPricing.discountPercent,
-        rating: p.rating,
-        reviewsCount: p.reviewsCount,
-        shade: p.shade,
-        tag: p.tag,
-        imageUrl: p.imageUrl,
-      };
-    });
+  const realOffers = realBestSellers.filter(p => 
+    findActivePromotionForProduct(p.id, p.slug, 'STOREFRONT', activePromotions) !== null
+  );
 
 
   return (
@@ -329,17 +241,36 @@ export default async function StoreFrontPage({ params }: { params: Promise<Param
       </section>
 
       {/* -------------------------------------------------------------
-          4. MOST REQUESTED PRODUCTS SECTION ("الأكثر طلباً" - 4 منتجات بسطرين)
+          4. MOST REQUESTED PRODUCTS SECTION ("الأكثر طلباً")
+          تظهر المنتجات الحقيقية فقط المخصصة للمتجر الإلكتروني من لوحة الإدارة
       ------------------------------------------------------------- */}
-      <HomeProductShowcase
-        title={isAr ? 'الأكثر طلباً' : 'Best Sellers'}
-        subtitle={isAr ? 'المنتجات الأكثر طلباً وإقبالاً في متجرنا' : 'Top selling products in our store'}
-        viewAllHref={`/${locale}/shop`}
-        viewAllLabel={isAr ? 'عرض جميع المنتجات' : 'View All'}
-        products={bestSellersWithCustomBadges}
-        locale={locale}
-        isOfferSection={false}
-      />
+      {realBestSellers.length > 0 ? (
+        <HomeProductShowcase
+          title={isAr ? 'الأكثر طلباً' : 'Best Sellers'}
+          subtitle={isAr ? 'المنتجات الأكثر طلباً وإقبالاً في متجرنا' : 'Top selling products in our store'}
+          viewAllHref={`/${locale}/shop`}
+          viewAllLabel={isAr ? 'عرض جميع المنتجات' : 'View All'}
+          products={realBestSellers}
+          locale={locale}
+          isOfferSection={false}
+        />
+      ) : (
+        <section className="py-12 bg-pink-50/40 border-b border-pink-100/60">
+          <div className="container mx-auto px-6 text-center max-w-xl">
+            <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-pink-100 flex items-center justify-center text-[#E6007E]">
+              <ShoppingBag className="w-6 h-6" />
+            </div>
+            <h3 className="font-heading font-black text-lg text-zinc-900 mb-1">
+              {isAr ? 'المتجر الإلكتروني قيد تجهيز العروض' : 'Storefront Launching Soon'}
+            </h3>
+            <p className="text-xs text-zinc-600 leading-relaxed">
+              {isAr 
+                ? 'منتجاتنا متوفرة حالياً في صالة المحل والكاشير في عين الباشا، وسيتم توفير الطلب أونلاين فور إضافة المنتجات لقسم المتجر الإلكتروني.'
+                : 'Our products are currently available in-store at Ain Al-Basha. Online ordering will be enabled soon.'}
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* -------------------------------------------------------------
           5. EXCLUSIVE OFFERS & DEALS SECTION (قسم العروض والتخفيضات)
