@@ -39,7 +39,8 @@ export function ProductNewForm({
   genders = [],
   seasons = [],
   families = [],
-  nextSku 
+  nextSku,
+  initialChannel
 }: { 
   categories: Category[]; 
   brands?: BrandOption[];
@@ -48,9 +49,14 @@ export function ProductNewForm({
   families?: Category[];
   globalPrices?: Record<string, number>;
   nextSku?: string;
+  initialChannel?: 'ONLINE' | 'POS' | 'SHARED' | 'STOREFRONT' | 'BOTH';
 }) {
   const router = useRouter();
-  const [channel, setChannel] = useState<'BOTH' | 'STOREFRONT' | 'POS'>('BOTH');
+  const [channel, setChannel] = useState<'BOTH' | 'STOREFRONT' | 'POS'>(() => {
+    if (initialChannel === 'ONLINE' || initialChannel === 'STOREFRONT') return 'STOREFRONT';
+    if (initialChannel === 'POS') return 'POS';
+    return 'BOTH';
+  });
   const [variantType, setVariantType] = useState<'SHADE' | 'SCENT' | 'SIZE' | 'NONE'>('SHADE');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
   const [autoSku] = useState(() => nextSku || 'GHZ-' + Math.floor(1000 + Math.random() * 9000).toString());
@@ -249,8 +255,14 @@ export function ProductNewForm({
       const formData = new FormData(e.currentTarget);
       formData.set('sku', autoSku);
 
+      const mappedChannel = channel === 'STOREFRONT' ? 'ONLINE' : (channel === 'POS' ? 'POS' : 'SHARED');
+      formData.set('channel', mappedChannel);
+      formData.set('targetChannel', mappedChannel);
+
       if (channel === 'POS') {
         formData.set('isVisible', 'false');
+      } else {
+        formData.set('isVisible', 'true');
       }
 
       // NameEn is optional: fallback to nameAr if left empty

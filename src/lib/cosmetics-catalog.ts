@@ -18,6 +18,7 @@ export interface DemoProduct {
   tag?: string;
   isFeatured: boolean;
   isPOSOnly?: boolean;
+  channel?: 'ONLINE' | 'POS' | 'SHARED';
   shortDescription: string;
   fullDescription: string;
   howToUse: string;

@@ -3,8 +3,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { filsToDisplay } from '@/lib/money';
-import { Search, Plus, Sparkles, Tag, Trash2, Edit3, Globe, ShoppingBag, Eye, EyeOff, Loader2 } from 'lucide-react';
-import { deleteProduct, toggleProductStoreVisibility, toggleProductPOSVisibility } from '@/actions/products';
+import { Search, Plus, Sparkles, Tag, Trash2, Edit3, Globe, ShoppingBag, Eye, EyeOff, Loader2, Layers, CheckCircle2 } from 'lucide-react';
+import { deleteProduct, toggleProductStoreVisibility, toggleProductPOSVisibility, updateProductChannelAction } from '@/actions/products';
 
 export function AdminProductsClient({ products, globalPrices, adminId, categories }: { products: any[], globalPrices: any, adminId: string, categories: any[] }) {
   const [productList, setProductList] = useState<any[]>(products);
@@ -15,19 +15,43 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
+  const [activeChannelTab, setActiveChannelTab] = useState<'ALL' | 'ONLINE' | 'POS' | 'SHARED'>('ALL');
 
-  // Filter products by search
+  // Channel product counts
+  const onlineCount = useMemo(() => 
+    productList.filter(p => p.channel === 'ONLINE' || (p.isVisible && p.isPOSAvailable === false)).length,
+    [productList]
+  );
+  const posCount = useMemo(() => 
+    productList.filter(p => p.channel === 'POS' || (!p.isVisible && p.isPOSAvailable)).length,
+    [productList]
+  );
+  const sharedCount = useMemo(() => 
+    productList.filter(p => p.channel === 'SHARED' || (!p.channel && (p.isVisible !== false && p.isPOSAvailable !== false))).length,
+    [productList]
+  );
+
+  // Filter products by search and channel
   const filteredProducts = useMemo(() => {
-    if (!search.trim()) return productList;
+    let list = productList;
+    if (activeChannelTab === 'ONLINE') {
+      list = list.filter(p => p.channel === 'ONLINE' || (p.isVisible && p.isPOSAvailable === false));
+    } else if (activeChannelTab === 'POS') {
+      list = list.filter(p => p.channel === 'POS' || (!p.isVisible && p.isPOSAvailable));
+    } else if (activeChannelTab === 'SHARED') {
+      list = list.filter(p => p.channel === 'SHARED' || (!p.channel && (p.isVisible !== false && p.isPOSAvailable !== false)));
+    }
+
+    if (!search.trim()) return list;
     const lowerSearch = search.toLowerCase();
-    return productList.filter(p => 
-      p.nameAr.toLowerCase().includes(lowerSearch) || 
+    return list.filter(p => 
+      p.nameAr?.toLowerCase().includes(lowerSearch) || 
       (p.nameEn && p.nameEn.toLowerCase().includes(lowerSearch)) ||
       (p.sku && p.sku.toLowerCase().includes(lowerSearch)) ||
       (p.brand?.name && p.brand.name.toLowerCase().includes(lowerSearch)) ||
       (p.brand?.nameAr && p.brand.nameAr.toLowerCase().includes(lowerSearch))
     );
-  }, [productList, search]);
+  }, [productList, search, activeChannelTab]);
 
   const toggleSelectAll = () => {
     if (selectedIds.length === filteredProducts.length) {
@@ -41,6 +65,34 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
     setSelectedIds(prev => 
       prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
     );
+  };
+
+  // Switch product channel action
+  const handleChannelChange = async (productId: string, newChannel: 'ONLINE' | 'POS' | 'SHARED') => {
+    setBusyIds(prev => ({ ...prev, [`chan_${productId}`]: true }));
+    // Optimistic update
+    setProductList(prev => prev.map(p => {
+      if (p.id === productId) {
+        return {
+          ...p,
+          channel: newChannel,
+          isVisible: newChannel !== 'POS',
+          isPOSAvailable: newChannel !== 'ONLINE'
+        };
+      }
+      return p;
+    }));
+
+    try {
+      const res = await updateProductChannelAction(productId, newChannel);
+      if (!res.success) {
+        alert(res.error || 'فشل تحديث قسم المنتج');
+      }
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء تحديث قسم المنتج');
+    } finally {
+      setBusyIds(prev => ({ ...prev, [`chan_${productId}`]: false }));
+    }
   };
 
   // Toggle Store Visibility (المتجر الإلكتروني)
@@ -142,13 +194,96 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
             />
           </div>
           <Link
-            href="/admin/products/new"
+            href={
+              activeChannelTab === 'ONLINE' ? '/admin/products/new?channel=ONLINE' :
+              activeChannelTab === 'POS' ? '/admin/products/new?channel=POS' :
+              activeChannelTab === 'SHARED' ? '/admin/products/new?channel=SHARED' :
+              '/admin/products/new'
+            }
             className="flex items-center justify-center gap-2 bg-[#E6007E] hover:bg-[#c9006e] text-white px-5 py-2 rounded-xl font-bold transition text-sm shadow-sm whitespace-nowrap"
           >
             <Plus className="w-4 h-4" />
-            إضافة منتج جديد
+            {
+              activeChannelTab === 'ONLINE' ? 'إضافة منتج للمتجر الإلكتروني' :
+              activeChannelTab === 'POS' ? 'إضافة منتج لكاشير المحل' :
+              activeChannelTab === 'SHARED' ? 'إضافة منتج مشترك (متجر + كاشير)' :
+              'إضافة منتج جديد'
+            }
           </Link>
         </div>
+      </div>
+
+      {/* Product Channels Tabs (أقسام المتجر الإلكتروني، الكاشير، والمنتجات المشتركة) */}
+      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-zinc-100 rounded-2xl border border-zinc-200">
+        <button
+          type="button"
+          onClick={() => setActiveChannelTab('ALL')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+            activeChannelTab === 'ALL'
+              ? 'bg-zinc-800 text-white shadow-xs'
+              : 'text-zinc-700 hover:bg-white hover:text-zinc-900'
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          <span>كافة المنتجات</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-zinc-200 text-zinc-800">
+            {productList.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveChannelTab('ONLINE')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+            activeChannelTab === 'ONLINE'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-zinc-700 hover:bg-white hover:text-zinc-900'
+          }`}
+        >
+          <Globe className="w-4 h-4" />
+          <span>قسم المتجر الإلكتروني</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+            activeChannelTab === 'ONLINE' ? 'bg-blue-700 text-white' : 'bg-blue-100 text-blue-800'
+          }`}>
+            {onlineCount} منتج
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveChannelTab('POS')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+            activeChannelTab === 'POS'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'text-zinc-700 hover:bg-white hover:text-zinc-900'
+          }`}
+        >
+          <ShoppingBag className="w-4 h-4" />
+          <span>قسم كاشير وصالة المحل</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+            activeChannelTab === 'POS' ? 'bg-amber-700 text-white' : 'bg-amber-100 text-amber-800'
+          }`}>
+            {posCount} منتج
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveChannelTab('SHARED')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+            activeChannelTab === 'SHARED'
+              ? 'bg-[#E6007E] text-white shadow-xs'
+              : 'text-zinc-700 hover:bg-white hover:text-zinc-900'
+          }`}
+        >
+          <Sparkles className="w-4 h-4" />
+          <span>قسم المنتجات المشتركة (المتجر + الكاشير)</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+            activeChannelTab === 'SHARED' ? 'bg-pink-700 text-white' : 'bg-pink-100 text-[#E6007E]'
+          }`}>
+            {sharedCount} منتج
+          </span>
+        </button>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-zinc-200/80 overflow-hidden">
@@ -167,6 +302,7 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
                 <th className="px-4 py-3.5 w-14">صورة</th>
                 <th className="px-4 py-3.5">المنتج</th>
                 <th className="px-4 py-3.5">القسم</th>
+                <th className="px-4 py-3.5 text-center">قناة البيع / القسم</th>
                 <th className="px-4 py-3.5">الدرجات / الخيارات</th>
                 <th className="px-4 py-3.5 text-center">سعر التكلفة</th>
                 <th className="px-4 py-3.5 text-center">سعر البيع</th>
@@ -240,6 +376,42 @@ export function AdminProductsClient({ products, globalPrices, adminId, categorie
                     </td>
                     <td className="px-4 py-3 text-xs text-zinc-800 font-bold">
                       {product.category?.name || '-'}
+                    </td>
+                    
+                    {/* Channel / Section Selector */}
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
+                      {(() => {
+                        const currentChannel: 'ONLINE' | 'POS' | 'SHARED' = product.channel || (
+                          (product.isPOSAvailable !== false && product.isVisible !== false) ? 'SHARED' :
+                          product.isPOSAvailable ? 'POS' : 'ONLINE'
+                        );
+
+                        return (
+                          <div className="inline-flex flex-col items-center">
+                            <select
+                              value={currentChannel}
+                              disabled={busyIds[`chan_${product.id}`]}
+                              onChange={(e) => handleChannelChange(product.id, e.target.value as any)}
+                              className={`text-xs font-black px-2.5 py-1 rounded-xl border outline-none cursor-pointer transition shadow-2xs ${
+                                currentChannel === 'ONLINE'
+                                  ? 'bg-blue-50 text-blue-900 border-blue-200 hover:bg-blue-100'
+                                  : currentChannel === 'POS'
+                                  ? 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                                  : 'bg-pink-50 text-[#E6007E] border-pink-200 hover:bg-pink-100'
+                              }`}
+                            >
+                              <option value="ONLINE">🌐 متجر إلكتروني</option>
+                              <option value="POS">🛍️ كاشير المحل</option>
+                              <option value="SHARED">✨ مشترك</option>
+                            </select>
+                            <span className="text-[10px] text-zinc-400 mt-0.5">
+                              {currentChannel === 'ONLINE' && 'المتجر فقط'}
+                              {currentChannel === 'POS' && 'الكاشير فقط'}
+                              {currentChannel === 'SHARED' && 'المتجر والكاشير'}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     
                     {/* Shades / Variants */}

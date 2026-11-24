@@ -37,6 +37,7 @@ import {
   AlertCircle,
   Printer,
   Boxes,
+  Database,
   TrendingUp,
   RotateCcw,
   Clock,
@@ -1112,8 +1113,16 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
               </div>
             </div>
 
-            {/* Actions: Print Button */}
+            {/* Actions: Retention & Print Buttons */}
             <div className="flex items-center gap-2">
+              <Link
+                href="/admin/system/retention"
+                className="bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-bold px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 transition border border-zinc-200"
+                title="سياسة حفظ البيانات والخطة المجانية: الفواتير 30 يوماً، السجلات 90 يوماً"
+              >
+                <Database className="w-4 h-4 text-[#E6007E]" />
+                <span>حفظ البيانات (90/30 يوم)</span>
+              </Link>
               <button
                 type="button"
                 onClick={handlePrint}

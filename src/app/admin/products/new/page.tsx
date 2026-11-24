@@ -7,8 +7,14 @@ import { ProductNewForm } from '@/components/ProductNewForm';
 import { getSynchronizedCategories } from '@/actions/categories';
 import { getGlobalSizePrices } from '@/actions/settings';
 
-export default async function AdminProductsNewPage() {
+export default async function AdminProductsNewPage({
+  searchParams
+}: {
+  searchParams?: Promise<{ channel?: string; [key: string]: string | string[] | undefined }>;
+}) {
   const session = await requirePermission('manage:products');
+  const sp = searchParams ? await searchParams : {};
+  const requestedChannel = typeof sp.channel === 'string' ? sp.channel.toUpperCase() : undefined;
   let user: any = session.employee || { name: 'مدير النظام (غزل)', role: { name: 'ADMIN' } };
   
   let categories: any[] = [];
@@ -99,6 +105,7 @@ export default async function AdminProductsNewPage() {
           families={families.map(f => ({ id: f.id, name: f.name }))}
           globalPrices={globalPrices}
           nextSku={nextSku}
+          initialChannel={requestedChannel === 'ONLINE' ? 'ONLINE' : (requestedChannel === 'POS' ? 'POS' : (requestedChannel === 'SHARED' ? 'SHARED' : undefined))}
         />
       </main>
     </div>

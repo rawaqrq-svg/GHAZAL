@@ -144,6 +144,7 @@ model Product {
   reviewReasons    String? // e.g. "Missing Image"
   stockStatus      String              @default("UNVERIFIED")
   notesStatus      String              @default("VERIFIED")
+  channel          String              @default("SHARED") // "ONLINE" | "POS" | "SHARED"
   variants         ProductVariant[]
   images           ProductImage[]
   accords          ProductAccord[]
@@ -162,6 +163,7 @@ model Product {
   @@index([genderId])
   @@index([seasonId])
   @@index([isVisible])
+  @@index([channel])
 }
 
 model ProductSimilar {

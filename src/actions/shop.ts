@@ -24,7 +24,7 @@ export async function getPaginatedProducts({
   orderBy?: string;
 }) {
   try {
-    const where: any = { isVisible: true };
+    const where: any = { isVisible: true, channel: { not: 'POS' } };
     
     const cleanCategory = (categoryId === '*' || categoryId === 'all') ? '' : categoryId;
     if (cleanCategory) {
@@ -106,7 +106,7 @@ export async function getPaginatedProducts({
     }
 
     if (products.length === 0) {
-      let filtered = COSMETICS_CATALOG.filter(p => !p.isPOSOnly);
+      let filtered = COSMETICS_CATALOG.filter(p => !p.isPOSOnly && p.channel !== 'POS');
 
       if (categoryId) {
         const normalizedCategory = 

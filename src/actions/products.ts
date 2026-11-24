@@ -104,7 +104,14 @@ export async function createProduct(formData: FormData) {
     const sku = (formData.get('sku') as string) || `GHZ-${Math.floor(1000 + Math.random() * 9000)}`;
     const shortDescription = (formData.get('shortDescription') as string) || null;
     const longDescription = (formData.get('longDescription') as string) || null;
-    const isVisible = formData.get('isVisible') === 'true';
+    
+    // Dedicated channel parameter: 'ONLINE' | 'POS' | 'SHARED'
+    const rawChannel = (formData.get('channel') as string || formData.get('targetChannel') as string || '').toUpperCase().trim();
+    const channel: 'ONLINE' | 'POS' | 'SHARED' = 
+      (rawChannel === 'ONLINE' || rawChannel === 'STOREFRONT') ? 'ONLINE' :
+      (rawChannel === 'POS') ? 'POS' : 'SHARED';
+
+    const isVisible = channel !== 'POS' && formData.get('isVisible') !== 'false';
     const isFeatured = formData.get('isFeatured') === 'true';
     const tag = (formData.get('tag') as string)?.trim() || null;
     const categoryId = formData.get('categoryId') as string;
@@ -142,6 +149,7 @@ export async function createProduct(formData: FormData) {
           sku,
           shortDescription,
           longDescription,
+          channel,
           isVisible,
           isFeatured,
           reviewReasons: tag ? `TAG:${tag}` : null,
@@ -198,6 +206,8 @@ export async function createProduct(formData: FormData) {
       categoryId: categoryId || 'cat-makeup',
       categorySlug: matchedCat?.slug || 'makeup',
       categoryName: matchedCat?.name || 'المكياج ومستحضرات التجميل',
+      channel,
+      isPOSOnly: channel === 'POS',
       priceFils: variants[0]?.price ? Number(variants[0].price) : 1000,
       originalPriceFils: firstVariantCompareAt && firstVariantCompareAt > Number(variants[0]?.price) ? firstVariantCompareAt : undefined,
       rating: 5,
@@ -245,7 +255,14 @@ export async function updateProduct(productId: string, formData: FormData) {
     const sku = formData.get('sku') as string;
     const shortDescription = (formData.get('shortDescription') as string) || null;
     const longDescription = (formData.get('longDescription') as string) || null;
-    const isVisible = formData.get('isVisible') === 'true';
+    
+    // Dedicated channel parameter: 'ONLINE' | 'POS' | 'SHARED'
+    const rawChannel = (formData.get('channel') as string || formData.get('targetChannel') as string || '').toUpperCase().trim();
+    const channel: 'ONLINE' | 'POS' | 'SHARED' = 
+      (rawChannel === 'ONLINE' || rawChannel === 'STOREFRONT') ? 'ONLINE' :
+      (rawChannel === 'POS') ? 'POS' : 'SHARED';
+
+    const isVisible = channel !== 'POS' && formData.get('isVisible') !== 'false';
     const isFeatured = formData.get('isFeatured') === 'true';
     const tag = (formData.get('tag') as string)?.trim() || null;
     const categoryId = formData.get('categoryId') as string;
@@ -300,6 +317,7 @@ export async function updateProduct(productId: string, formData: FormData) {
           sku,
           shortDescription,
           longDescription,
+          channel,
           isVisible,
           isFeatured,
           reviewReasons: tag ? `TAG:${tag}` : null,
@@ -535,6 +553,59 @@ export async function toggleProductPOSVisibility(productId: string, isPOSAvailab
     return { success: true, isPOSAvailable };
   } catch (error: any) {
     console.error('Error toggling POS visibility:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * تحديث فوري لقناة عرض وبيع المنتج:
+ * ONLINE: متجر إلكتروني فقط
+ * POS: كاشير المحل فقط
+ * SHARED: منتج مشترك بين المتجر والكاشير
+ */
+export async function updateProductChannelAction(productId: string, channel: 'ONLINE' | 'POS' | 'SHARED') {
+  try {
+    await requirePermission('manage:products');
+    const isVisible = channel !== 'POS';
+    const isPOSAvailable = channel !== 'ONLINE';
+
+    // 1. Update in Prisma PostgreSQL
+    try {
+      await prisma.product.update({
+        where: { id: productId },
+        data: {
+          channel,
+          isVisible
+        }
+      });
+      await prisma.productVariant.updateMany({
+        where: { productId },
+        data: { isActive: isPOSAvailable }
+      });
+    } catch (dbErr) {
+      console.warn('Prisma update fallback for updateProductChannelAction:', dbErr);
+    }
+
+    // 2. Update in-memory cosmetics catalog
+    const demo = COSMETICS_CATALOG.find(p => p.id === productId || p.slug === productId);
+    if (demo) {
+      demo.channel = channel;
+      demo.isPOSOnly = channel === 'POS';
+      (demo as any).isPOSAvailable = isPOSAvailable;
+      demo.variants.forEach(v => {
+        (v as any).isActive = isPOSAvailable;
+      });
+    }
+
+    revalidatePath('/admin/products');
+    revalidatePath('/pos/cashier');
+    revalidatePath('/[locale]/shop', 'page');
+    revalidatePath('/[locale]', 'layout');
+    revalidatePath('/admin/settlements');
+
+    return { success: true, channel };
+  } catch (error: any) {
+    console.error('Error updating product channel:', error);
     return { success: false, error: error.message };
   }
 }

@@ -2611,7 +2611,7 @@ export async function getLivePOSCatalog(): Promise<{
     let products: any[] = [];
     try {
       const productsRaw = await prisma.product.findMany({
-        where: { isVisible: true },
+        where: { channel: { in: ['POS', 'SHARED'] } },
         include: {
           variants: {
             where: { isActive: true }
@@ -2646,7 +2646,7 @@ export async function getLivePOSCatalog(): Promise<{
       console.warn('Prisma product query skipped in getLivePOSCatalog, using beauty catalog fallback');
     }
 
-    const catalogPOSProducts = COSMETICS_CATALOG.filter(p => (p as any).isVisible !== false).map(p => ({
+    const catalogPOSProducts = COSMETICS_CATALOG.filter(p => (p as any).isVisible !== false && p.channel !== 'ONLINE').map(p => ({
       id: p.id,
       nameAr: p.nameAr,
       nameEn: p.nameEn,

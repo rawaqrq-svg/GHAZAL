@@ -78,6 +78,7 @@ export function AdminSidebar({ employeeName, roleName = 'ADMIN' }: AdminSidebarP
         { href: '/admin/employees', label: 'الموظفون والصلاحيات', icon: Users },
         { href: '/admin/deliveries?tab=shipping-zones', label: 'أسعار التوصيل بالمحافظات', icon: Truck },
         { href: '/admin/content', label: 'إدارة واجهة المتجر (CMS)', icon: FileCode },
+        { href: '/admin/system/retention', label: 'حفظ البيانات ومساحة التخزين (90/30 يوم)', icon: Database },
       ]
     }
   ];

@@ -211,7 +211,7 @@ erDiagram
 | الكيان / الجدول | الوظيفة التقنية | الحقول الجوهرية |
 | :--- | :--- | :--- |
 | **`Category`** | إدارة الأقسام مع دعم شجرة التصنيف الفرعية لعمق مستوى واحد والسحب والإفلات | `id`, `nameAr`, `nameEn`, `slug`, `parentId`, `displayOrder`, `icon`, `image` |
-| **`Product`** | بيانات المنتجات والأسعار والتكلفة والباركود والمخزون | `id`, `sku`, `barcode`, `nameAr`, `nameEn`, `retailPriceFils`, `costPriceFils`, `stock` |
+| **`Product`** | بيانات المنتجات والأسعار والتكلفة والباركود والمخزون مع قناة البيع المخصصة | `id`, `sku`, `barcode`, `nameAr`, `nameEn`, `retailPriceFils`, `costPriceFils`, `stock`, `channel` ('ONLINE'\|'POS'\|'SHARED') |
 | **`Order`** | طلبات الشراء الواردة من المتجر الإلكتروني أو الهاتف | `id`, `orderNumber`, `customerName`, `customerPhone`, `city`, `address`, `subtotalFils`, `shippingFeeFils`, `totalFils`, `status` |
 | **`CourierBatch`** | طلبية التوصيل المجمعة (المانفيست) لشركة الشحن | `id`, `batchNumber`, `courierName`, `status`, `totalCodFils`, `totalDeliveryFeeFils`, `netSettlementFils`, `notes`, `createdAt` |
 | **`CourierCompany`** | شركات الشحن والمناديب المعتمدة | `id`, `name`, `phone`, `type`, `active`, `isDefaultStoreCourier`, `defaultFeeFils` |
