@@ -186,7 +186,7 @@ model ProductVariant {
   colorName         String? // e.g. "أحمر كلاسيكي", "وردي ناعم"
   colorHex          String? // e.g. "#E6007E"
   imageUrl          String? // Image specific to this shade/size/scent variant
-  barcode           String?      @unique
+  barcode           String?
   sku               String       @unique
   price             Int // Stored in minor units (e.g. fils or cents)
   compareAt         Int?
