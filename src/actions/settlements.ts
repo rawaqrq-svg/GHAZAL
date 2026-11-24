@@ -129,7 +129,7 @@ export interface CourierBatchRecord {
   id: string;
   batchNumber: string; // رقم الطلبية (قابل للتعديل)
   courierName: string; // شركة التوصيل أو اسم المندوب
-  status: 'PREPARED' | 'OUT_FOR_DELIVERY' | 'PARTIALLY_DELIVERED' | 'DELIVERED' | 'PARTIALLY_SETTLED' | 'SETTLED' | 'CANCELLED';
+  status: 'PREPARED' | 'OUT_FOR_DELIVERY' | 'PARTIALLY_DELIVERED' | 'DELIVERED' | 'PARTIALLY_SETTLED' | 'SETTLED' | 'CANCELLED' | 'LIABILITY_OWED' | string;
   orders: CourierBatchOrderSummary[];
   totalExpectedCodFils: number; // إجمالي التحصيل المتوقع لجميع طلبات الشحنة
   totalCollectedCodFils: number; // التحصيل الفعلي للطلبات المسلمة

@@ -222,23 +222,6 @@ export default async function StoreFrontPage({ params }: { params: Promise<Param
       };
     });
 
-  // 4. Dynamic Brands Query (تظهر الماركات فقط إذا تمت إضافتها من لوحة الإدارة)
-  let dbBrands: any[] = [];
-  try {
-    dbBrands = await prisma.brand.findMany({
-      orderBy: { name: 'asc' },
-      select: {
-        id: true,
-        name: true,
-        nameAr: true,
-        description: true,
-        slug: true,
-        logoUrl: true,
-      }
-    });
-  } catch (err) {
-    console.warn('Prisma brand query skipped or offline:', err);
-  }
 
   return (
     <main className="flex-1 bg-white text-[#1A1A1A]" dir={isAr ? 'rtl' : 'ltr'}>
@@ -374,37 +357,7 @@ export default async function StoreFrontPage({ params }: { params: Promise<Param
         />
       )}
 
-      {/* -------------------------------------------------------------
-          5. BRAND LOGOS RIBBON (الماركات المعتمدة - تظهر فقط إذا أضيفت ماركات)
-      ------------------------------------------------------------- */}
-      {dbBrands.length > 0 && (
-        <section className="py-12 bg-zinc-50 border-b border-zinc-200">
-          <div className="container mx-auto px-6">
-            <div className="text-center mb-6">
-              <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest block">
-                {isAr ? 'أشهر الماركات العالمية والمحلية' : 'Popular Global & Local Brands'}
-              </span>
-            </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 items-center">
-              {dbBrands.map((brand, i) => (
-                <Link
-                  key={brand.id || i}
-                  href={`/${locale}/shop?search=${encodeURIComponent(brand.name)}`}
-                  className="bg-white p-4 rounded-xl border border-zinc-200 text-center hover:border-[#E6007E] transition-all shadow-2xs hover:shadow-xs group block"
-                >
-                  <p className="font-heading font-extrabold text-xs md:text-sm text-zinc-800 tracking-wider group-hover:text-[#E6007E] transition-colors">
-                    {isAr ? (brand.nameAr || brand.name) : brand.name}
-                  </p>
-                  {brand.description && (
-                    <span className="text-[9px] text-zinc-400 block mt-1 truncate">{brand.description}</span>
-                  )}
-                </Link>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
     </main>
   );
 }

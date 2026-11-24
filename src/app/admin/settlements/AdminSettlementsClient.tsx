@@ -4179,6 +4179,104 @@ export default function AdminSettlementsClient({ initialData, currentUserRole, i
         </div>
       )}
 
+      {/* MODAL 1.5: RECORD BATCH INSTALLMENT REMITTANCE */}
+      {selectedBatchForRemittance && (
+        <div className="print:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-black text-base text-slate-900">تسجيل دفعة توريد لشحنة #{selectedBatchForRemittance.batchNumber}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  شركة التوصيل: {selectedBatchForRemittance.courierName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedBatchForRemittance(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-xs space-y-1 font-mono">
+              <div className="flex justify-between">
+                <span className="text-slate-500">صافي تسوية الشحنة:</span>
+                <span className={`font-bold ${selectedBatchForRemittance.netSettlementFils < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {formatMoney(selectedBatchForRemittance.netSettlementFils)} د.أ
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">إجمالي ما تم توريده مسبقاً:</span>
+                <span className="font-bold text-teal-800">{formatMoney(selectedBatchForRemittance.remittedFils || 0)} د.أ</span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200/60 pt-1 font-black">
+                <span className="text-slate-700">المبلغ المتبقي للتسوية:</span>
+                <span className="text-amber-800">
+                  {formatMoney(selectedBatchForRemittance.remainingFils ?? (selectedBatchForRemittance.netSettlementFils - (selectedBatchForRemittance.remittedFils || 0)))} د.أ
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleRecordBatchRemittance} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">مبلغ الدفعة الحالية (د.أ):</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  required
+                  value={batchRemittanceAmount}
+                  onChange={(e) => setBatchRemittanceAmount(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl p-2.5 outline-none font-mono font-bold text-sm bg-slate-50 focus:bg-white focus:border-[#E6007E]"
+                  placeholder="0.000"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">رقم الإشعار / الحوالة / الوصل البنكي:</label>
+                <input
+                  type="text"
+                  required
+                  value={batchRemittanceRef}
+                  onChange={(e) => setBatchRemittanceRef(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl p-2.5 outline-none font-mono font-bold text-xs bg-slate-50 focus:bg-white focus:border-[#E6007E]"
+                  placeholder="مثال: CLIQ-982341 أو REC-5021"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">ملاحظات التحويل:</label>
+                <input
+                  type="text"
+                  value={batchRemittanceNotes}
+                  onChange={(e) => setBatchRemittanceNotes(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl p-2.5 outline-none text-xs bg-slate-50 focus:bg-white focus:border-[#E6007E]"
+                  placeholder="مثال: دفعة نقدية مستلمة من المندوب في المعرض"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t border-slate-100 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBatchForRemittance(null)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingBatchRemittance}
+                  className="px-5 py-2 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                >
+                  {isSubmittingBatchRemittance && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>تأكيد وتسجيل الدفعة</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL 2: CASH DRAWER RECONCILIATION */}
       {isCashDrawerModalOpen && (
         <div className="print:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
