@@ -1,5 +1,5 @@
 import React from 'react';
-import { requireAuth, getEmployeePermissions } from '@/lib/dal';
+import { requirePOSAuth, getEmployeePermissions } from '@/lib/dal';
 import Link from 'next/link';
 import { logout } from '@/actions/auth';
 import { ShoppingBag, ArrowDownLeft, DollarSign, BarChart3, Layers, LogOut, Shield } from 'lucide-react';
@@ -9,7 +9,7 @@ export default async function Layout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await requireAuth();
+  const session = await requirePOSAuth();
   const permissions = await getEmployeePermissions(session.employeeId);
 
   const showCounter = permissions.includes('pos:access');

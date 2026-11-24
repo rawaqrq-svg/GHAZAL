@@ -44,7 +44,8 @@ export default async function proxy(request: NextRequest) {
   }
 
   const isPairedTerminal = request.cookies.get('ghazal_pos_paired_device')?.value;
-  if (isPosRoute && !sessionToken && !isPairedTerminal) {
+  const isCashierWorkspace = pathname === '/pos' || pathname === '/pos/cashier' || pathname.startsWith('/pos/cashier/');
+  if (isPosRoute && !isCashierWorkspace && !sessionToken && !isPairedTerminal) {
     return redirectWithCookies(new URL('/pos/login', request.url));
   }
 

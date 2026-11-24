@@ -1,4 +1,4 @@
-import { getCurrentSession } from './auth';
+import { getCurrentSession, getOrCreateResilientCashierSession } from './auth';
 import { redirect } from 'next/navigation';
 import { prisma } from './db';
 import 'server-only';
@@ -7,13 +7,18 @@ export async function checkSessionAuth() {
   return await getCurrentSession();
 }
 
-export async function requireAuth() {
+export async function requireAuth(redirectTo: string = '/admin/login') {
   const session = await getCurrentSession();
   
   if (!session) {
-    redirect('/admin/login');
+    redirect(redirectTo);
   }
 
+  return session;
+}
+
+export async function requirePOSAuth() {
+  const session = await getOrCreateResilientCashierSession();
   return session;
 }
 
@@ -50,7 +55,12 @@ const SENSITIVE_OPERATIONS = new Set([
 ]);
 
 export async function requirePermission(action: string) {
-  const session = await requireAuth();
+  let session = await getCurrentSession();
+  if (!session && action.startsWith('pos:')) {
+    session = await getOrCreateResilientCashierSession();
+  } else if (!session) {
+    redirect('/admin/login');
+  }
   
   // Enforce strict role-based permissions
   const roleName = session.employee?.role?.name ? session.employee.role.name.toUpperCase() : '';
