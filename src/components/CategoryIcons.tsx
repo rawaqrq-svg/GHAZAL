@@ -177,3 +177,52 @@ export function OffersIcon({ className = "w-8 h-8" }: { className?: string }) {
     </svg>
   );
 }
+
+export function FaceCareIcon({ className = "w-8 h-8" }: { className?: string }) {
+  return (
+    <svg 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      xmlns="http://www.w3.org/2000/svg" 
+      className={className}
+      stroke="currentColor" 
+      strokeWidth={1.75} 
+      strokeLinecap="round" 
+      strokeLinejoin="round"
+    >
+      {/* Face Contour Oval */}
+      <path d="M12 3C7 3 5 7 5 13c0 4.5 3 8 7 8s7-3.5 7-8c0-6-2-10-7-10z" fill="#FFF0F5" stroke="#E6007E" />
+      {/* Sparkles of glow */}
+      <path d="M12 7v2M18 6l-1 1M6 6l1 1" stroke="#E6007E" strokeWidth={1.5} />
+      {/* Peaceful closed eyes */}
+      <path d="M8.5 13c.8.8 2 .8 2.8 0M12.7 13c.8.8 2 .8 2.8 0" stroke="#E6007E" strokeWidth={1.5} />
+      {/* Gentle smile */}
+      <path d="M10 17c1 1 3 1 4 0" stroke="#E6007E" strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+export function DeodorantsIcon({ className = "w-8 h-8" }: { className?: string }) {
+  return (
+    <svg 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      xmlns="http://www.w3.org/2000/svg" 
+      className={className}
+      stroke="currentColor" 
+      strokeWidth={1.75} 
+      strokeLinecap="round" 
+      strokeLinejoin="round"
+    >
+      {/* Roll-on Sphere Top */}
+      <ellipse cx="12" cy="6" rx="4" ry="3" fill="#FADAE6" stroke="#E6007E" />
+      {/* Neck Collar */}
+      <rect x="7.5" y="7" width="9" height="2.5" rx="0.5" fill="#FFF0F5" stroke="#E6007E" />
+      {/* Bottle Body */}
+      <path d="M7 9.5h10l-1 10.5a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2L7 9.5z" fill="#FFF0F5" stroke="#E6007E" />
+      {/* Freshness Wave / Breeze Lines */}
+      <path d="M9.5 14c1.5 1 3.5-1 5 0" stroke="#E6007E" strokeWidth={1.5} />
+      <path d="M10 17c1 .7 2.5-.7 4 0" stroke="#E6007E" strokeWidth={1.5} />
+    </svg>
+  );
+}

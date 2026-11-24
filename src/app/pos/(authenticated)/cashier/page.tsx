@@ -9,8 +9,8 @@ export default async function POSCashierPage() {
   const session = await requirePermission('pos:access');
   const employeeId = session.employeeId;
   const activePermissions = await getEmployeePermissions(employeeId);
-  const hasOrdersViewPermission = activePermissions.includes('pos.orders.view') || activePermissions.includes('manage:orders');
-  const hasOrdersManagePermission = activePermissions.includes('pos.orders.manage') || activePermissions.includes('manage:orders');
+  const hasOrdersViewPermission = activePermissions.includes('pos.orders.view') || activePermissions.includes('manage:orders') || activePermissions.includes('pos:access');
+  const hasOrdersManagePermission = activePermissions.includes('pos.orders.manage') || activePermissions.includes('manage:orders') || activePermissions.includes('pos:access');
 
   // 2. Fetch active cashier info
   let employee = session.employee || {

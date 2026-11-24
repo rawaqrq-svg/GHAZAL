@@ -53,6 +53,8 @@ export function Header() {
     { labelAr: 'الرئيسية', labelEn: 'Home', href: `/${locale}` },
     { labelAr: 'المكياج', labelEn: 'Makeup', href: `/${locale}/shop?category=makeup` },
     { labelAr: 'العناية بالبشرة', labelEn: 'Skincare', href: `/${locale}/shop?category=skincare` },
+    { labelAr: 'العناية بالوجه', labelEn: 'Face Care', href: `/${locale}/shop?category=face-care` },
+    { labelAr: 'مزيلات عرق', labelEn: 'Deodorants', href: `/${locale}/shop?category=deodorants` },
     { labelAr: 'العناية بالشعر', labelEn: 'Haircare', href: `/${locale}/shop?category=haircare` },
     { labelAr: 'العطور', labelEn: 'Fragrances', href: `/${locale}/shop?category=perfumes` },
     { labelAr: 'الإكسسوارات', labelEn: 'Accessories', href: `/${locale}/shop?category=accessories` },

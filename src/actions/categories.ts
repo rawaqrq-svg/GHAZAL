@@ -11,20 +11,26 @@ export interface SyncedCategory {
   name: string;
   slug: string;
   imagePath?: string;
+  sortOrder?: number;
+  parentId?: string | null;
+  parentName?: string | null;
+  children?: SyncedCategory[];
   _count?: { products: number };
 }
 
 const DEFAULT_STORE_CATEGORIES: SyncedCategory[] = [
-  { id: 'cat-makeup', name: 'المكياج ومستحضرات التجميل', slug: 'makeup', imagePath: '/logo.png' },
-  { id: 'cat-skincare', name: 'العناية بالبشرة', slug: 'skincare', imagePath: '/logo.png' },
-  { id: 'cat-haircare', name: 'العناية بالشعر', slug: 'haircare', imagePath: '/logo.png' },
-  { id: 'cat-fragrances', name: 'العطور الفاخرة', slug: 'fragrances', imagePath: '/logo.png' },
-  { id: 'cat-beauty-tools', name: 'أدوات التجميل والفرش', slug: 'beauty-tools', imagePath: '/logo.png' },
-  { id: 'cat-accessories', name: 'الإكسسوارات والهدايا', slug: 'accessories', imagePath: '/logo.png' },
+  { id: 'cat-makeup', name: 'المكياج ومستحضرات التجميل', slug: 'makeup', imagePath: '/logo.png', sortOrder: 1 },
+  { id: 'cat-skincare', name: 'العناية بالبشرة', slug: 'skincare', imagePath: '/logo.png', sortOrder: 2 },
+  { id: 'cat-face-care', name: 'العناية بالوجه', slug: 'face-care', imagePath: '/logo.png', sortOrder: 3 },
+  { id: 'cat-deodorants', name: 'مزيلات عرق', slug: 'deodorants', imagePath: '/logo.png', sortOrder: 4 },
+  { id: 'cat-haircare', name: 'العناية بالشعر', slug: 'haircare', imagePath: '/logo.png', sortOrder: 5 },
+  { id: 'cat-fragrances', name: 'العطور الفاخرة', slug: 'fragrances', imagePath: '/logo.png', sortOrder: 6 },
+  { id: 'cat-beauty-tools', name: 'أدوات التجميل والفرش', slug: 'beauty-tools', imagePath: '/logo.png', sortOrder: 7 },
+  { id: 'cat-accessories', name: 'الإكسسوارات والهدايا', slug: 'accessories', imagePath: '/logo.png', sortOrder: 8 },
 ];
 
 // In-memory runtime categories store (ensures offline and fallback resilience)
-const inMemoryCategories: SyncedCategory[] = [...DEFAULT_STORE_CATEGORIES];
+let inMemoryCategories: SyncedCategory[] = [...DEFAULT_STORE_CATEGORIES];
 
 /**
  * Get synchronized categories across DB, SiteSettings, and In-Memory store
@@ -34,18 +40,66 @@ export async function getSynchronizedCategories(): Promise<SyncedCategory[]> {
 
   // 1. Try fetching from database
   try {
-    const dbCats = await prisma.category.findMany({
-      orderBy: { name: 'asc' },
+    let dbCats = await prisma.category.findMany({
+      orderBy: [
+        { sortOrder: 'asc' },
+        { name: 'asc' }
+      ],
       include: {
+        parent: { select: { id: true, name: true } },
+        children: {
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+          include: { _count: { select: { products: true } } }
+        },
         _count: { select: { products: true } }
       }
     });
+
+    // Auto-seed required categories if missing: "العناية بالوجه" and "مزيلات عرق"
+    const requiredCats = [
+      { name: 'العناية بالوجه', slug: 'face-care', sortOrder: 3 },
+      { name: 'مزيلات عرق', slug: 'deodorants', sortOrder: 4 }
+    ];
+
+    for (const req of requiredCats) {
+      if (!dbCats.some(c => c.slug === req.slug || c.name === req.name)) {
+        try {
+          const created = await prisma.category.create({
+            data: {
+              name: req.name,
+              slug: req.slug,
+              imagePath: '/logo.png',
+              sortOrder: req.sortOrder
+            },
+            include: {
+              parent: { select: { id: true, name: true } },
+              children: { include: { _count: { select: { products: true } } } },
+              _count: { select: { products: true } }
+            }
+          });
+          dbCats.push(created as any);
+        } catch {}
+      }
+    }
+
     if (dbCats && dbCats.length > 0) {
       categories = dbCats.map(c => ({
         id: c.id,
         name: c.name,
         slug: c.slug,
         imagePath: c.imagePath || '/logo.png',
+        sortOrder: c.sortOrder ?? 0,
+        parentId: c.parentId,
+        parentName: c.parent?.name || null,
+        children: (c.children || []).map(ch => ({
+          id: ch.id,
+          name: ch.name,
+          slug: ch.slug,
+          imagePath: ch.imagePath || '/logo.png',
+          sortOrder: ch.sortOrder ?? 0,
+          parentId: ch.parentId,
+          _count: ch._count
+        })),
         _count: c._count
       }));
     }
@@ -113,6 +167,54 @@ async function saveUploadedImage(imageFile: File): Promise<string> {
   return result.url;
 }
 
+/**
+ * Reorder categories (Drag & Drop)
+ */
+export async function reorderCategoriesAction(orderedIds: string[], parentId?: string | null) {
+  await requirePermission('manage:products');
+
+  try {
+    for (let index = 0; index < orderedIds.length; index++) {
+      const id = orderedIds[index];
+      const sortOrder = index + 1;
+      try {
+        await prisma.category.update({
+          where: { id },
+          data: {
+            sortOrder,
+            ...(parentId !== undefined ? { parentId: parentId || null } : {})
+          }
+        });
+      } catch {}
+
+      const memCat = inMemoryCategories.find(c => c.id === id);
+      if (memCat) {
+        memCat.sortOrder = sortOrder;
+        if (parentId !== undefined) {
+          memCat.parentId = parentId || null;
+        }
+      }
+    }
+
+    // Refresh in-memory list sorting
+    inMemoryCategories.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    await persistCategoriesToSiteSettings(inMemoryCategories);
+
+    revalidatePath('/admin/categories');
+    revalidatePath('/admin/products');
+    revalidatePath('/ar/shop');
+    revalidatePath('/pos/cashier');
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error reordering categories:', error);
+    return { success: false, error: error?.message || 'حدث خطأ أثناء حفظ ترتيب الأقسام' };
+  }
+}
+
+/**
+ * Create a new category or subcategory (strictly 1 level deep)
+ */
 export async function createCategory(formData: FormData) {
   await requirePermission('manage:products');
 
@@ -123,6 +225,28 @@ export async function createCategory(formData: FormData) {
     const cleanName = name.trim();
     const slug = cleanName.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-') + '-' + Date.now();
 
+    // Check parentId (1-level deep hierarchy enforcement)
+    const rawParentId = formData.get('parentId') as string;
+    let parentId: string | null = null;
+    let parentName: string | null = null;
+
+    if (rawParentId && rawParentId.trim() && rawParentId !== 'root') {
+      parentId = rawParentId.trim();
+
+      // Enforce: Parent cannot be a subcategory itself! (Maximum 1 level of nesting)
+      const parentCat = await prisma.category.findUnique({
+        where: { id: parentId },
+        select: { id: true, parentId: true, name: true }
+      });
+
+      if (parentCat) {
+        if (parentCat.parentId) {
+          throw new Error('لا يمكن إضافة قسم داخل قسم فرعي! الحد الأقصى للتفريغ هو مستوى واحد فقط (أقسام رئيسية وبداخلها أقسام فرعية مباشرة).');
+        }
+        parentName = parentCat.name;
+      }
+    }
+
     // Handle image
     let imagePath = '/logo.png';
     const imageFile = formData.get('image') as File;
@@ -131,6 +255,7 @@ export async function createCategory(formData: FormData) {
     }
 
     let categoryId = `cat-${Date.now()}`;
+    const nextSortOrder = inMemoryCategories.length + 1;
 
     // 1. Try DB insertion
     try {
@@ -138,7 +263,9 @@ export async function createCategory(formData: FormData) {
         data: {
           name: cleanName,
           slug,
-          imagePath
+          imagePath,
+          parentId,
+          sortOrder: nextSortOrder
         }
       });
       categoryId = category.id;
@@ -150,7 +277,8 @@ export async function createCategory(formData: FormData) {
           data: { categoryId: category.id }
         });
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.message?.includes('الحد الأقصى')) throw e;
       console.warn('Prisma createCategory offline fallback');
     }
 
@@ -160,6 +288,9 @@ export async function createCategory(formData: FormData) {
       name: cleanName,
       slug,
       imagePath,
+      parentId,
+      parentName,
+      sortOrder: nextSortOrder,
       _count: { products: 0 }
     };
     inMemoryCategories.push(newCat);
@@ -169,6 +300,7 @@ export async function createCategory(formData: FormData) {
     revalidatePath('/admin/products');
     revalidatePath('/admin/products/new');
     revalidatePath('/ar/shop');
+    revalidatePath('/pos/cashier');
 
     return { success: true, categoryId };
   } catch (error: any) {
@@ -177,6 +309,9 @@ export async function createCategory(formData: FormData) {
   }
 }
 
+/**
+ * Update an existing category
+ */
 export async function updateCategory(id: string, formData: FormData) {
   await requirePermission('manage:products');
 
@@ -186,6 +321,33 @@ export async function updateCategory(id: string, formData: FormData) {
 
     const cleanName = name.trim();
     const data: any = { name: cleanName };
+
+    // Parent ID update
+    const rawParentId = formData.get('parentId') as string;
+    let parentId: string | null = null;
+    let parentName: string | null = null;
+
+    if (rawParentId && rawParentId.trim() && rawParentId !== 'root') {
+      parentId = rawParentId.trim();
+      if (parentId === id) {
+        throw new Error('لا يمكن تعيين القسم ليكون قسماً فرعياً لنفسه');
+      }
+
+      const parentCat = await prisma.category.findUnique({
+        where: { id: parentId },
+        select: { id: true, parentId: true, name: true }
+      });
+
+      if (parentCat) {
+        if (parentCat.parentId) {
+          throw new Error('لا يمكن إضافة قسم داخل قسم فرعي! الحد الأقصى للتفريغ هو مستوى واحد فقط.');
+        }
+        parentName = parentCat.name;
+      }
+      data.parentId = parentId;
+    } else if (rawParentId === 'root') {
+      data.parentId = null;
+    }
 
     const imageFile = formData.get('image') as File;
     if (imageFile && imageFile.size > 0) {
@@ -206,7 +368,8 @@ export async function updateCategory(id: string, formData: FormData) {
           data: { categoryId: id }
         });
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.message?.includes('لا يمكن')) throw e;
       console.warn('Prisma updateCategory offline fallback');
     }
 
@@ -215,6 +378,10 @@ export async function updateCategory(id: string, formData: FormData) {
     if (memIdx >= 0) {
       inMemoryCategories[memIdx].name = cleanName;
       if (data.imagePath) inMemoryCategories[memIdx].imagePath = data.imagePath;
+      if (data.parentId !== undefined) {
+        inMemoryCategories[memIdx].parentId = data.parentId;
+        inMemoryCategories[memIdx].parentName = parentName;
+      }
     }
     await persistCategoriesToSiteSettings(inMemoryCategories);
 
@@ -229,6 +396,7 @@ export async function updateCategory(id: string, formData: FormData) {
     revalidatePath('/admin/products');
     revalidatePath('/admin/products/new');
     revalidatePath('/ar/shop');
+    revalidatePath('/pos/cashier');
 
     return { success: true };
   } catch (error: any) {
@@ -237,6 +405,9 @@ export async function updateCategory(id: string, formData: FormData) {
   }
 }
 
+/**
+ * Delete a category
+ */
 export async function deleteCategory(id: string, deleteProducts: boolean, fallbackCategoryId?: string) {
   await requirePermission('manage:products');
 
@@ -291,6 +462,7 @@ export async function deleteCategory(id: string, deleteProducts: boolean, fallba
     revalidatePath('/admin/products');
     revalidatePath('/admin/products/new');
     revalidatePath('/ar/shop');
+    revalidatePath('/pos/cashier');
 
     return { success: true };
   } catch (error: any) {

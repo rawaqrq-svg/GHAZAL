@@ -7,6 +7,8 @@ import {
   PerfumeIcon,
   HaircareIcon,
   SkincareIcon,
+  FaceCareIcon,
+  DeodorantsIcon,
   MakeupIcon,
   AccessoriesIcon,
   ToolsIcon,
@@ -77,6 +79,22 @@ export function ShopFilters({
       categoryParam: 'skincare',
       filterParam: '',
       matches: urlCategory === 'skincare'
+    },
+    {
+      id: 'face-care',
+      name: 'العناية بالوجه',
+      icon: FaceCareIcon,
+      categoryParam: 'face-care',
+      filterParam: '',
+      matches: urlCategory === 'face-care'
+    },
+    {
+      id: 'deodorants',
+      name: 'مزيلات عرق',
+      icon: DeodorantsIcon,
+      categoryParam: 'deodorants',
+      filterParam: '',
+      matches: urlCategory === 'deodorants'
     },
     {
       id: 'makeup',

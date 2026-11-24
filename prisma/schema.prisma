@@ -216,8 +216,15 @@ model Category {
   name        String
   description String?
   imagePath   String?
+  sortOrder   Int                 @default(0)
+  parentId    String?
+  parent      Category?           @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children    Category[]          @relation("CategoryHierarchy")
   products    Product[]
   slides      HomepageHeroSlide[]
+
+  @@index([parentId])
+  @@index([sortOrder])
 }
 
 model Brand {

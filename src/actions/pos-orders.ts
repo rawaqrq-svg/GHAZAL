@@ -16,7 +16,16 @@ export async function getPOSOrders() {
       },
       take: 200,
       include: {
-        items: true
+        items: {
+          include: {
+            product: {
+              include: {
+                images: true,
+                variants: true
+              }
+            }
+          }
+        }
       },
       orderBy: { createdAt: 'desc' }
     });

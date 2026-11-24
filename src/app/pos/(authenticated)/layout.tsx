@@ -2,7 +2,7 @@ import React from 'react';
 import { requirePOSAuth, getEmployeePermissions } from '@/lib/dal';
 import Link from 'next/link';
 import { logout } from '@/actions/auth';
-import { ShoppingBag, ArrowDownLeft, DollarSign, BarChart3, Layers, LogOut, Shield } from 'lucide-react';
+import { ShoppingBag, ArrowDownLeft, DollarSign, BarChart3, Layers, Truck, LogOut, Shield } from 'lucide-react';
 
 export default async function Layout({
   children,
@@ -85,6 +85,16 @@ export default async function Layout({
           >
             <Layers className="w-5 h-5 mb-1 group-hover:scale-110 transition-transform" />
             <span className="text-[11px] font-bold">طلبات المتجر</span>
+          </Link>
+        )}
+
+        {showOrders && (
+          <Link
+            href="/pos/deliveries"
+            className="flex flex-col items-center justify-center text-zinc-700 hover:text-purple-700 transition-colors w-full py-1 text-center group"
+          >
+            <Truck className="w-5 h-5 mb-1 group-hover:scale-110 transition-transform text-purple-600" />
+            <span className="text-[11px] font-bold">طلبيات شركة التوصيل</span>
           </Link>
         )}
       </nav>

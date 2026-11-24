@@ -13,6 +13,8 @@ interface Props {
   confirmAction: (orderId: string) => Promise<any>;
   cancelAction: (orderId: string) => Promise<any>;
   updateStatusAction: (orderId: string, status: string, shippingCost?: number) => Promise<any>;
+  isPOS?: boolean;
+  onStatusChangeSuccess?: (newStatus: string) => void;
 }
 
 export function AdminOrderQuickActions({ 
@@ -22,7 +24,9 @@ export function AdminOrderQuickActions({
   reference,
   confirmAction,
   cancelAction,
-  updateStatusAction
+  updateStatusAction,
+  isPOS = false,
+  onStatusChangeSuccess
 }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -91,9 +95,17 @@ export function AdminOrderQuickActions({
       }
 
       // الانتقال فوراً لتبويب حالة الطلب الجديدة
-      const targetTab = getTargetTab(newStatus);
-      router.push(`/admin/orders?tab=${targetTab}`);
-      router.refresh();
+      if (onStatusChangeSuccess) {
+        onStatusChangeSuccess(newStatus);
+      } else {
+        const targetTab = getTargetTab(newStatus);
+        if (isPOS) {
+          router.push(`/pos/orders?tab=${targetTab}`);
+        } else {
+          router.push(`/admin/orders?tab=${targetTab}`);
+        }
+        router.refresh();
+      }
     });
   };
 
@@ -191,7 +203,7 @@ export function AdminOrderQuickActions({
               المكان الوحيد لتغيير حالة هذا الطلب هو من خلال <strong>طلبيات شركة التوصيل</strong>. يتم تحديد هذا الطلب هناك وإنشاء طلبية شحن وتحديد رقم لها لتغيير حالتها ومتابعتها.
             </p>
             <Link 
-              href="/admin/deliveries"
+              href={isPOS ? "/pos/deliveries" : "/admin/deliveries"}
               className="inline-flex items-center justify-center gap-2 w-full py-2.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-black text-xs transition shadow-xs active:scale-95 cursor-pointer"
             >
               <Truck className="w-4 h-4" />

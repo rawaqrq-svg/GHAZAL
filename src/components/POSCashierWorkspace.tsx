@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useTransition, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import { 
   X, Zap, Barcode, Plus, Search, Tag, Sparkles, ShoppingBag, Trash2, CheckCircle2, 
   Printer, Receipt, RefreshCw, Undo2, Users, Calendar, Phone, CreditCard, Wallet, 
   Banknote, FileText, Check, AlertCircle, Clock, Settings, Keyboard, Volume2, VolumeX,
   Maximize2, Minimize2, Edit3, Save, RotateCcw, Eye, Filter, Wifi, WifiOff,
-  CheckCheck, RefreshCcw, HardDrive, ShieldCheck
+  CheckCheck, RefreshCcw, HardDrive, ShieldCheck, Layers, Truck
 } from 'lucide-react';
 import { 
   storeCatalogOffline, 
@@ -2570,6 +2571,24 @@ export function POSCashierWorkspace({
                   <Banknote className="w-3.5 h-3.5 text-pink-400" />
                   <span>سحب مصروف من الدرج</span>
                 </button>
+
+                <Link
+                  href="/pos/orders"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-zinc-100 text-zinc-900 border border-zinc-300 text-xs font-bold transition shadow-xs"
+                  title="عرض وإدارة طلبات المتجر الإلكتروني المعتمدة وحالاتها"
+                >
+                  <Layers className="w-3.5 h-3.5 text-zinc-700" />
+                  <span>طلبات المتجر</span>
+                </Link>
+
+                <Link
+                  href="/pos/deliveries"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs font-bold transition shadow-xs"
+                  title="عرض طلبيات شركة التوصيل والشحنات وإرسال المندوبين"
+                >
+                  <Truck className="w-3.5 h-3.5 text-purple-600" />
+                  <span>طلبيات شركة التوصيل</span>
+                </Link>
               </div>
             </div>
 

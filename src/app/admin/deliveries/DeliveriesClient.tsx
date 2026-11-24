@@ -35,6 +35,7 @@ interface Props {
   deliverySettlement: DeliverySettlementStatement;
   initialShippingZones?: any[];
   initialCourierCompanies?: CourierCompany[];
+  isPOS?: boolean;
 }
 
 const getInitialTab = (param?: string): 'READY_ORDERS' | 'BATCHES' | 'ALL_ORDERS' | 'SHIPPING_ZONES' | 'COURIER_COMPANIES' => {
@@ -55,7 +56,8 @@ export function DeliveriesClient({
   initialDeliveryOrders,
   deliverySettlement,
   initialShippingZones = [],
-  initialCourierCompanies = []
+  initialCourierCompanies = [],
+  isPOS = false
 }: Props) {
   const [activeTab, setActiveTab] = useState<'READY_ORDERS' | 'BATCHES' | 'ALL_ORDERS' | 'SHIPPING_ZONES' | 'COURIER_COMPANIES'>(
     () => getInitialTab(initialTabParam)
@@ -797,7 +799,7 @@ export function DeliveriesClient({
             </button>
           )}
           <Link
-            href="/admin/orders"
+            href={isPOS ? "/pos/orders" : "/admin/orders"}
             className="px-4 py-2.5 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700 text-xs font-bold transition flex items-center gap-1.5"
           >
             <Package className="w-4 h-4 text-zinc-400" />
@@ -1366,7 +1368,7 @@ export function DeliveriesClient({
                                 return (
                                   <tr key={bo.orderId} className={`hover:bg-zinc-50 ${isOrderCancelled ? 'bg-rose-50/20 opacity-80' : ''}`}>
                                     <td className="p-2.5 font-mono font-bold text-purple-700">
-                                      <Link href={`/admin/orders/${bo.orderId}`} className="hover:underline flex items-center gap-1">
+                                      <Link href={isPOS ? `/pos/orders?search=${bo.orderNumber}` : `/admin/orders/${bo.orderId}`} className="hover:underline flex items-center gap-1">
                                         <span>{bo.orderNumber}</span>
                                         {isOrderCancelled && <span className="text-rose-600 text-[10px] font-black font-sans">(ملغي)</span>}
                                       </Link>
@@ -1464,7 +1466,7 @@ export function DeliveriesClient({
                   return (
                     <tr key={ord.id} className="hover:bg-zinc-50 transition">
                       <td className="p-3.5 font-mono font-bold text-purple-700">
-                        <Link href={`/admin/orders/${ord.id}`} className="hover:underline">
+                        <Link href={isPOS ? `/pos/orders?search=${ord.orderNumber}` : `/admin/orders/${ord.id}`} className="hover:underline">
                           {ord.orderNumber}
                         </Link>
                       </td>
@@ -1520,7 +1522,7 @@ export function DeliveriesClient({
                             <span>تفاصيل الطلبية {parentBatch ? `(${parentBatch.orders.length})` : ''}</span>
                           </button>
                           <Link
-                            href={`/admin/orders/${ord.id}`}
+                            href={isPOS ? `/pos/orders?search=${ord.orderNumber}` : `/admin/orders/${ord.id}`}
                             className="px-2.5 py-1 rounded-lg border border-zinc-200 text-xs font-bold text-zinc-700 hover:bg-zinc-100 transition"
                             title="تعديل هذا الطلب"
                           >
@@ -2839,10 +2841,10 @@ export function DeliveriesClient({
                             <span>الفاتورة الرسمية</span>
                           </Link>
                           <Link
-                            href={`/admin/orders/${o.orderId || o.orderNumber}`}
-                            target="_blank"
+                            href={isPOS ? `/pos/orders?search=${o.orderNumber}` : `/admin/orders/${o.orderId || o.orderNumber}`}
+                            target={isPOS ? undefined : "_blank"}
                             className="px-2.5 py-1 bg-zinc-900 hover:bg-black text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition"
-                            title="تعديل الطلب في لوحة الإدارة"
+                            title={isPOS ? "عرض الطلب في الكاشير" : "تعديل الطلب في لوحة الإدارة"}
                           >
                             <ExternalLink className="w-3 h-3 text-pink-400" />
                             <span>تفاصيل الطلب</span>
